@@ -33,13 +33,17 @@ sub main()
     m.pingAt = 0
     m.connected = false
     m.lostNoticeShown = false
+    m.sizeQueue = [] ' BTTV emotes waiting for a HEAD request before they may animate
+    m.sizeChecks = 0
     m.top.observeField("control", m.port)
 
     for each source in m.sources
         startRequest(source.key, source.url, invalid, invalid)
     end for
-    badges = chatBadgeRequest(m.channel, get_user_setting("device_code", ""))
-    startRequest(badges.key, badges.url, badges.body, badges.headers)
+    deviceId = get_user_setting("device_code", "")
+    for each gql in [chatBadgeRequest(m.channel, deviceId), chatTwitchEmotesRequest(m.channel, deviceId)]
+        startRequest(gql.key, gql.url, gql.body, gql.headers)
+    end for
     if m.top.history
         startRequest("history", "https://recent-messages.robotty.de/api/v2/recent-messages/" + m.channel + "?limit=50&hide_moderation_messages=true&hide_moderated_messages=true", invalid, invalid)
     end if
@@ -268,6 +272,24 @@ sub flushInbox(now as integer)
         end if
     end for
     if batch.Count() > 0 then m.top.messages = batch
+    queueSizeChecks()
+end sub
+
+' Starts HEAD requests for animated BTTV emotes seen for the first time, four at a time.
+' They animate meanwhile; afterwards only files small enough keep animating.
+sub queueSizeChecks()
+    if m.tokenizer.pendingChecks.Count() > 0
+        m.sizeQueue.Append(m.tokenizer.pendingChecks)
+        m.tokenizer.pendingChecks = []
+    end if
+    while m.sizeChecks < 4 and m.sizeQueue.Count() > 0
+        entry = m.sizeQueue.Shift()
+        transfer = createTransfer(entry.check)
+        if transfer.asyncHead()
+            m.requests[transfer.getIdentity().ToStr()] = { key: "size", transfer: transfer, entry: entry }
+            m.sizeChecks = m.sizeChecks + 1
+        end if
+    end while
 end sub
 
 ' Turns one IRC line into a render item for the overlay, or invalid if there's nothing to show.
@@ -341,7 +363,7 @@ function chatBadgeUrls(badgesTag as dynamic) as object
     return urls
 end function
 
-sub startRequest(key as string, url as string, body as dynamic, headers as dynamic)
+function createTransfer(url as string) as object
     transfer = CreateObject("roUrlTransfer")
     transfer.setMessagePort(m.port)
     transfer.setUrl(url)
@@ -349,6 +371,11 @@ sub startRequest(key as string, url as string, body as dynamic, headers as dynam
     transfer.initClientCertificates()
     transfer.enableEncodings(true)
     transfer.retainBodyOnError(true)
+    return transfer
+end function
+
+sub startRequest(key as string, url as string, body as dynamic, headers as dynamic)
+    transfer = createTransfer(url)
     if headers <> invalid then transfer.setHeaders(headers)
     started = false
     if body <> invalid
@@ -368,14 +395,22 @@ sub onRequestDone(msg as object)
     request = m.requests[id]
     if request = invalid then return
     m.requests.Delete(id)
+    key = request.key
+    if key = "size"
+        m.sizeChecks = m.sizeChecks - 1
+        applyEmoteSizeCheck(request.entry, msg.getResponseCode(), msg.getResponseHeaders())
+        queueSizeChecks()
+        return
+    end if
+
     json = invalid
     if msg.getResponseCode() = 200 then json = ParseJson(msg.getString())
-
-    key = request.key
     if key = "history"
         addHistory(json)
     else if key = "badges"
         m.badges = parseTwitchBadges(json)
+    else if key = "twitch-emotes"
+        m.tokenizer.twitchAnimated = parseTwitchAnimatedEmotes(json)
     else
         m.emoteLists[key] = parseChatEmotes(key, json)
         m.tokenizer.emotes = buildChatEmoteMap(m.sources, m.emoteLists)

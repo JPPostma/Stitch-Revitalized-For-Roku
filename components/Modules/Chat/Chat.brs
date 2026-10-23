@@ -18,6 +18,7 @@ sub init()
     m.rows = [] ' drawn messages, oldest first: { node, y, h, id, login, anims }
     m.recent = [] ' last messages' data, used to redraw after resizing or re-showing chat
     m.animated = [] ' playing AnimatedImage entries, oldest first
+    m.paused = [] ' AnimatedImage entries paused on their current frame, oldest first
     m.contentBottom = 0
     m.emoteSizes = {}
     m.emoteSizes.SetModeCaseSensitive()
@@ -184,6 +185,7 @@ sub clearRows()
     m.content.removeChildrenIndex(m.content.getChildCount(), 0)
     m.rows = []
     m.animated = []
+    m.paused = []
     m.contentBottom = 0
     m.content.translation = [0, m.top.height]
 end sub
@@ -222,13 +224,20 @@ sub pruneRows()
     end if
 end sub
 
-' Keeps at most animLimit emotes animating; the oldest ones become still images.
+' Keeps at most animLimit emotes animating. Older ones pause on their current frame (provider
+' stills are just the first frame, which is blank for some emotes); only the oldest paused
+' ones, beyond twice the limit, are swapped for still images to free the decoders.
 sub trackAnimations(anims as object)
     for each entry in anims
         m.animated.Push(entry)
     end for
     while m.animated.Count() > m.animLimit
-        freezeAnimation(m.animated.Shift())
+        entry = m.animated.Shift()
+        entry.node.control = "pause"
+        m.paused.Push(entry)
+    end while
+    while m.paused.Count() > m.animLimit * 2
+        freezeAnimation(m.paused.Shift())
     end while
 end sub
 
@@ -250,12 +259,17 @@ sub releaseAnimations(anims as object)
     for each entry in anims
         entry.dead = true
     end for
-    playing = []
-    for each entry in m.animated
-        if not entry.dead then playing.Push(entry)
-    end for
-    m.animated = playing
+    m.animated = liveAnimations(m.animated)
+    m.paused = liveAnimations(m.paused)
 end sub
+
+function liveAnimations(entries as object) as object
+    live = []
+    for each entry in entries
+        if not entry.dead then live.Push(entry)
+    end for
+    return live
+end function
 
 ' Lays out one message: [badges] Name: text emote text... wrapped to the panel width.
 function buildRow(item as object) as object
@@ -452,7 +466,8 @@ function createEmote(token as object, w as float, h as float) as object
             animated.height = h
             animated.loadingBitmapUri = token.url
             animated.failedBitmapUri = token.url
-            animated.mimeType = "video/webp"
+            ' Twitch serves GIFs, which AnimatedImage detects by itself; 7TV/BTTV serve WebP.
+            if token.gif <> true then animated.mimeType = "video/webp"
             animated.uri = token.anim
             animated.control = "loop"
             return animated

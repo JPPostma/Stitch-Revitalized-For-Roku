@@ -123,6 +123,8 @@ end function
 function createChatTokenizer(emotes as object) as object
     return {
         emotes: emotes,
+        twitchAnimated: {}, ' ids of the channel's animated Twitch emotes
+        pendingChecks: [], ' emote entries whose animated file still needs a size check
         ' Chatterino/7TV users append U+E0000 to dodge Twitch's duplicate-message check.
         dupeBypass: Chr(&hE0000),
         nonAscii: CreateObject("roRegex", "[^\x00-\x7F]", ""),
@@ -133,8 +135,8 @@ end function
 
 ' Splits a chat message into render tokens:
 '   { text: "words joined by spaces", link?: true, glue?: true }
-'   { url, w, h, anim?, zw?, unsized?, emoji?, glue? } for emotes and emoji
-' glue means "no space before this token" (emoji touching text).
+'   { url, w, h, anim?, gif?, zw?, unsized?, emoji?, glue? } for emotes and emoji
+' glue means "no space before this token" (emoji touching text); gif means anim is a GIF.
 function tokenizeChatMessage(text as string, twitchEmotes as object, tokenizer as object) as object
     tokens = []
     textRun = ""
@@ -145,8 +147,21 @@ function tokenizeChatMessage(text as string, twitchEmotes as object, tokenizer a
             twitchId = twitchEmotes[word]
             if twitchId <> invalid
                 image = { url: "https://static-cdn.jtvnw.net/emoticons/v2/" + twitchId + "/static/dark/2.0", w: 28, h: 28 }
+                if tokenizer.twitchAnimated[twitchId] = true
+                    image.anim = "https://static-cdn.jtvnw.net/emoticons/v2/" + twitchId + "/animated/dark/1.0"
+                    image.gif = true
+                end if
             else
                 image = emotes[word]
+                if image <> invalid and image.check <> invalid
+                    if image.checkQueued <> true
+                        image.checkQueued = true
+                        tokenizer.pendingChecks.Push(image)
+                    end if
+                    ' Animate while the size check runs (some BTTV stills are blank); once it
+                    ' answers, only files small enough keep animating.
+                    image = { url: image.url, w: image.w, h: image.h, unsized: image.unsized, zw: image.zw, anim: image.check }
+                end if
             end if
 
             if image <> invalid

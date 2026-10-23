@@ -103,7 +103,7 @@
     },
     {
         "title": "Animated Emotes",
-        "description": "How many animated 7TV emotes can play at once. Older ones freeze on a still frame. Needs Roku OS 15.3 or newer; other devices show still emotes.",
+        "description": "How many animated emotes (7TV, BTTV and the channel's Twitch emotes) can play at once. Older ones pause where they are. Needs Roku OS 15.3 or newer; other devices show still emotes.",
         "settingName": "ChatAnimatedEmotes",
         "type": "radio",
         "default": "16",

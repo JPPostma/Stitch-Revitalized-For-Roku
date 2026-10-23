@@ -1,7 +1,8 @@
 ' Third-party emote (7TV, BTTV, FFZ) and Twitch badge sources for the chat overlay.
 ' Every emote parser returns a flat list of entries:
 '   { name, url (still image), w, h (source size, used for the aspect ratio),
-'     anim? (animated WebP), zw? (zero-width overlay), unsized? (size unknown until loaded) }
+'     anim? (animated WebP), check? (animated WebP to use once its size is checked),
+'     zw? (zero-width overlay), unsized? (size unknown until loaded) }
 
 ' Emote lists to load for a channel. Later sources override earlier ones with the same
 ' name, matching Chatterino: channel emotes beat global ones, then FFZ > BTTV > 7TV.
@@ -67,7 +68,7 @@ function parseSevenTvEmotes(json as object) as object
             if data.animated = true
                 entry.url = base + "/2x_static.png"
                 ' Very long animations stay still: AnimatedImage decodes the whole file in memory.
-                if animatedBytes > 0 and animatedBytes <= 262144
+                if animatedBytes > 0 and animatedBytes <= 524288
                     entry.anim = base + "/1x.webp"
                 end if
             else
@@ -83,8 +84,10 @@ function parseSevenTvEmotes(json as object) as object
 end function
 
 ' BTTV: the global endpoint is an array; a channel has channelEmotes and sharedEmotes.
-' BTTV doesn't report image sizes, so the overlay learns them once an image loads.
-' Animated BTTV emotes stay still: their WebPs can be megabytes.
+' BTTV doesn't report image sizes, so the overlay learns them once an image loads, and
+' animated emotes only animate after a HEAD request shows the file is small enough (most
+' are ~30 KB, a few are close to 1 MB). Their still frame can be blank, so animating
+' matters.
 function parseBttvEmotes(json as object) as object
     entries = []
     lists = []
@@ -104,6 +107,7 @@ function parseBttvEmotes(json as object) as object
         for each emote in list
             if emote.id <> invalid and emote.code <> invalid
                 entry = { name: emote.code, url: "https://cdn.betterttv.net/emote/" + emote.id + "/2x.png", w: 28, h: 28, unsized: true }
+                if emote.animated = true then entry.check = "https://cdn.betterttv.net/emote/" + emote.id + "/1x.webp"
                 if zeroWidth[emote.code] = true then entry.zw = true
                 entries.Push(entry)
             end if
@@ -150,6 +154,15 @@ function parseFfzEmotes(json as object) as object
     return entries
 end function
 
+' Result of the HEAD request for an entry's animated file: animate it only when the file
+' is small enough to download and decode comfortably (same 512 KB limit as 7TV).
+sub applyEmoteSizeCheck(entry as object, responseCode as integer, headers as dynamic)
+    size = 0
+    if headers <> invalid and headers["content-length"] <> invalid then size = headers["content-length"].ToInt()
+    if responseCode = 200 and size > 0 and size <= 524288 then entry.anim = entry.check
+    entry.Delete("check")
+end sub
+
 ' Merges the loaded lists into one case-sensitive name -> entry map (later sources win).
 function buildChatEmoteMap(sources as object, lists as object) as object
     emotes = {}
@@ -189,6 +202,41 @@ function chatBadgeRequest(channel as string, deviceId as string) as object
             "Referer": "https://android.tv.twitch.tv/"
         }
     }
+end function
+
+' Twitch GQL request listing the channel's subscriber emotes and whether each is animated.
+function chatTwitchEmotesRequest(channel as string, deviceId as string) as object
+    body = {
+        "query": "query($login: String!) { user(login: $login) { subscriptionProducts { emotes { id assetType } } } }",
+        "variables": { "login": channel }
+    }
+    return {
+        key: "twitch-emotes",
+        url: "https://gql.twitch.tv/gql",
+        body: FormatJson(body),
+        headers: {
+            "Accept": "*/*",
+            "Client-Id": "ue6666qo983tsx6so1t0vnawi233wa",
+            "Content-Type": "application/json",
+            "Device-ID": deviceId
+        }
+    }
+end function
+
+' Returns Twitch emote id -> true for the channel's animated subscriber emotes.
+function parseTwitchAnimatedEmotes(json as dynamic) as object
+    animated = {}
+    if json = invalid or json.data = invalid or json.data.user = invalid then return animated
+    products = json.data.user.subscriptionProducts
+    if products = invalid then return animated
+    for each product in products
+        if product <> invalid and product.emotes <> invalid
+            for each emote in product.emotes
+                if emote <> invalid and emote.id <> invalid and emote.assetType = "ANIMATED" then animated[emote.id] = true
+            end for
+        end if
+    end for
+    return animated
 end function
 
 ' Returns "setID/version" -> image URL for global and channel badges.
