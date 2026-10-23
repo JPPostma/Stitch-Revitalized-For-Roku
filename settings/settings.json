@@ -68,7 +68,71 @@
             }
         ]
     },
-
+    {
+        "title": "Chat Delay",
+        "description": "Holds chat messages back so they line up with the video. Off shows chat in real time, the same as Twitch and Chatterino.",
+        "settingName": "ChatDelay",
+        "type": "radio",
+        "default": "0",
+        "options": [
+            {
+                "title": "Off (real time)",
+                "id": "0"
+            },
+            {
+                "title": "3 seconds",
+                "id": "3"
+            },
+            {
+                "title": "5 seconds",
+                "id": "5"
+            },
+            {
+                "title": "10 seconds",
+                "id": "10"
+            },
+            {
+                "title": "15 seconds",
+                "id": "15"
+            },
+            {
+                "title": "30 seconds",
+                "id": "30"
+            }
+        ]
+    },
+    {
+        "title": "Animated Emotes",
+        "description": "How many animated 7TV emotes can play at once. Older ones freeze on a still frame. Needs Roku OS 15.3 or newer; other devices show still emotes.",
+        "settingName": "ChatAnimatedEmotes",
+        "type": "radio",
+        "default": "16",
+        "options": [
+            {
+                "title": "Off",
+                "id": "0"
+            },
+            {
+                "title": "Up to 8",
+                "id": "8"
+            },
+            {
+                "title": "Up to 16",
+                "id": "16"
+            },
+            {
+                "title": "Up to 32",
+                "id": "32"
+            }
+        ]
+    },
+    {
+        "title": "Recent Chat History",
+        "description": "Shows the last messages sent before you opened the stream, using the recent-messages service Chatterino uses.",
+        "settingName": "ChatHistory",
+        "type": "bool",
+        "default": "true"
+    },
     {
         "title": "BetterTTV Emotes",
         "description": "Enables or Disables BetterTTV Emotes",

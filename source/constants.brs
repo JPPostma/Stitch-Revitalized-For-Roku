@@ -34,13 +34,6 @@ sub setConstants()
             }
         },
         supportedGraphicsResolution: maxResolution,
-        emoteCache: {},
-        globalTTVEmotes: {},
-        channelTTVEmotes: {},
-        channelTTVFrankerEmotes: {},
-        global7TVEmotes: {},
-        channel7TVEmotes: {},
-        twitchBadges: {},
         constants: {
             screenWidth: deviceInfo.GetUIResolution().width,
             screenHeight: deviceInfo.GetUIResolution().height,

@@ -393,7 +393,7 @@ end function
 sub init()
     m.chatWindow = m.top.findNode("chat")
     if m.chatWindow <> invalid
-        m.chatWindow.fontSize = get_user_setting("ChatFontSize")
+        m.chatWindow.fontSize = get_user_setting("ChatFontSize", "14").ToInt() ' registry values are strings
         m.chatWindow.observeField("visible", "onChatVisibilityChange")
     end if
     m.allowBreak = true ' Default to allowing break unless in quality change

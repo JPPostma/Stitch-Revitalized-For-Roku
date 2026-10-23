@@ -3,18 +3,19 @@
 <component name="ChatJob" extends="Task">
 
     <interface>
+        <!-- Inputs, set before control = "run" -->
         <field id="channel" type="string" />
-        <field id="loggedInUsername" type="string" value="" />
-        <field id="readyForNextComment" type="bool" value="true" />
-        <field id="nextComment" type="string" />
-        <field id="nextCommentObj" type="AssocArray" />
-        <field id="clientComment" type="string" />
-        <field id="sendMessage" type="string" />
-        <field id="forceLive" type="bool" value="false" />
+        <field id="channelId" type="string" />
+        <field id="delay" type="integer" value="0" />
+        <field id="history" type="bool" value="true" />
+        <field id="providers" type="assocarray" />
+        <!-- Output: batches of render items for the Chat overlay -->
+        <field id="messages" type="array" />
     </interface>
 
     <script type="text/brightscript" uri="ChatJob.brs" />
+    <script type="text/brightscript" uri="pkg:/source/utils/chatParser.brs" />
+    <script type="text/brightscript" uri="pkg:/source/utils/chatEmotes.brs" />
     <script type="text/brightscript" uri="pkg:/source/utils/config.brs" />
-    <script type="text/brightscript" uri="pkg:/source/utils/misc.brs" />
 
 </component>

@@ -19,6 +19,13 @@ A feature-complete Twitch client for Roku.
 - Respects Twitch's business model: ads and monetization work as intended
 - Anonymous browsing without login; sign in to access followed channels and chat
 
+### Chat
+
+- Messages appear in real time, like on Twitch or in Chatterino (Settings → Chat Delay can hold them back to match the video; off by default)
+- 7TV, BetterTTV and FrankerFaceZ emotes at their real sizes, including zero-width overlay emotes, plus badges and emoji
+- Animated 7TV emotes on Roku OS 15.3 and newer (Settings → Animated Emotes); older devices show still images
+- The last few messages sent before you opened the stream (Settings → Recent Chat History)
+
 ## Installation
 
 **Channel Store (recommended)**

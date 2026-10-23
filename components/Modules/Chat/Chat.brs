@@ -1,336 +1,585 @@
+' Chat overlay. ChatJob does all network and parsing work in its own thread; this component
+' only lays out the ready-to-draw batches it receives (badges, name, text, emotes, emoji).
+
 sub init()
-    m.chatPanel = m.top.findNode("chatPanel")
-    m.maskgroup = m.top.findNode("maskGroup")
-    setChatPanelSize()
-    setSizingParameters()
-    ' determines how far down the screen the first message will appear
-    ' set to 700 to have first message at bottom of screen.
-    m.translation = m.lower_bound - m.line_height
-end sub
+    m.background = m.top.findNode("chatBackground")
+    m.panel = m.top.findNode("chatPanel")
+    m.content = m.top.findNode("chatContent")
 
-sub updatePanelTranslation()
-    ' m.chatPanel.translation = [(m.top.width * 3), 0]
-    if m.maskGroup = invalid or m.global = invalid or m.global.constants = invalid then return
-    setChatPanelSize()
-    setSizingParameters()
-    m.maskGroup.maskSize = [(m.chatpanel.width * m.global.constants.maskScaleFactor), (m.chatPanel.height * m.global.constants.maskScaleFactor)]
-    m.maskGroup.maskOffset = [0, 0]
-    for each chatmessage in m.chatPanel.getChildren(-1, 0)
-        m.chatPanel.removeChild(chatmessage)
-    end for
-end sub
+    m.textColor = "0xEFEFF1FF"
+    m.mutedColor = "0xADADB8FF"
+    m.linkColor = "0xBF94FFFF"
+    m.noticeColor = "0x9147FFFF"
+    m.noticeBackground = "0x9147FF26"
+    m.regularFont = "pkg:/fonts/Archivo-Regular.otf"
+    m.boldFont = "pkg:/fonts/Archivo-Bold.otf"
 
-sub setSizingParameters()
-    m.left_bound = m.font_size / 2
-    m.right_bound = m.chatPanel.width - m.font_size
-    m.badge_size = (m.font_size * 1.6)
-    m.line_gap = m.font_size * 0.25
-    m.line_height = (m.font_size * 1.4)
+    m.chatJob = invalid
+    m.rows = [] ' drawn messages, oldest first: { node, y, h, id, login, anims }
+    m.recent = [] ' last messages' data, used to redraw after resizing or re-showing chat
+    m.animated = [] ' playing AnimatedImage entries, oldest first
+    m.contentBottom = 0
+    m.emoteSizes = {}
+    m.emoteSizes.SetModeCaseSensitive()
+    ' AnimatedImage needs Roku OS 15.3+ and isn't available on some older models.
+    ' BrighterScript's component list doesn't know it yet, hence the disable comment.
+    ' bs:disable-next-line: 1128
+    m.canAnimate = CreateObject("roSGNode", "AnimatedImage") <> invalid
+    m.animLimit = 0
 
-    m.message_height = (m.badge_size * 1.8)
-
-    m.lower_bound = m.chatPanel.height - m.message_height
-end sub
-
-sub setChatPanelSize()
-    m.font_size = m.top.fontSize
-    m.translation = m.chatPanel.height - m.font_size
-    m.lower_bound = m.chatPanel.height - m.font_size
-    m.right_bound = m.chatPanel.width - m.font_size
-    m.upper_bound = 0 - (m.chatPanel.height - m.font_size)
-end sub
-
-sub onInvisible()
-    if m.top.visible = false
-        m.chat.control = "stop"
-    else
-        m.chat.control = "run"
-    end if
-end sub
-
-' Stops the ChatJob (IRC) and EmoteJob tasks and releases their observers.
-' Called from VideoPlayer.exitPlayer() so the IRC socket loop and emote
-' fetcher are torn down at user-initiated exit, not just when SceneGraph
-' eventually fires onDestroy.
-'
-' Uses destroyTask() per AGENTS.md: unobserve first so any in-flight
-' nextCommentObj callback is suppressed before the task thread halts.
-sub stopJobs()
-    m.chat = destroyTask(m.chat, "nextCommentObj")
-    if m.EmoteJob <> invalid
-        m.EmoteJob.control = "stop"
-        m.EmoteJob = invalid
-    end if
-end sub
-
-sub onVideoChange()
-    if not m.top.control
-        m.chat.control = "stop"
-        m.top.control = true
-    end if
+    m.top.observeField("visible", "onVisibleChange")
+    applyLayout()
 end sub
 
 sub onEnterChannel()
-    m.chat = m.top.findnode("ChatJob")
-    m.chat.forceLive = m.top.forceLive
-    m.chat.observeField("nextCommentObj", "onNewCommentObj")
-    m.chat.channel = m.top.channel
-    m.chat.control = "stop"
-    m.chat.control = "run"
-    m.EmoteJob = m.top.findnode("EmoteJob")
-    m.EmoteJob.channel_id = m.top.channel_id
-    m.EmoteJob.channel = m.top.channel
-    m.EmoteJob.control = "run"
+    stopJobs()
+    m.recent = []
+    clearRows()
+    if m.top.channel = "" then return
+
+    m.animLimit = 0
+    if m.canAnimate then m.animLimit = settingNumber("ChatAnimatedEmotes", "16")
+    m.chatJob = CreateObject("roSGNode", "ChatJob")
+    m.chatJob.channel = m.top.channel
+    m.chatJob.channelId = m.top.channel_id
+    m.chatJob.delay = settingNumber("ChatDelay", "0")
+    m.chatJob.history = get_user_setting("ChatHistory", "true") = "true"
+    m.chatJob.providers = {
+        seventv: get_user_setting("7tvEmote", "true") = "true",
+        bttv: get_user_setting("BetterTTVEmote", "true") = "true",
+        ffz: get_user_setting("FFZEmote", "true") = "true"
+    }
+    m.chatJob.observeField("messages", "onChatMessages")
+    m.chatJob.control = "run"
 end sub
 
-function extractMessage(section) as object
-    m.userstate_change = false
-    words = section.Split(" ")
-    if words[2] = "USERSTATE"
-        m.userstate_change = true
-    end if
-    message = ""
-    for i = 4 to words.Count() - 1
-        message += words[i] + " "
-    end for
-    return message
+' Stops the ChatJob task (IRC socket and downloads). Called from VideoPlayer.exitPlayer()
+' so the connection closes at user-initiated exit, not only when onDestroy eventually runs.
+sub stopJobs()
+    m.chatJob = destroyTask(m.chatJob, "messages")
+end sub
+
+function settingNumber(name as string, fallback as string) as integer
+    value = get_user_setting(name, fallback)
+    if value = invalid then value = fallback
+    return value.ToInt()
 end function
 
-function buildBadges(badges)
-    group = createObject("roSGNode", "Group")
-    group.visible = true
-    badge_translation = 0
-    for each badge in badges
-        if badge <> invalid and badge <> ""
-            if m.global.twitchBadges <> invalid
-                if m.global.twitchBadges[badge] <> invalid
-                    poster = createObject("roSGNode", "Poster")
-                    poster.uri = m.global.twitchBadges[badge]
-                    poster.width = m.badge_size
-                    poster.height = m.badge_size
-                    poster.visible = true
-                    poster.translation = [badge_translation, 0]
-                    group.appendChild(poster)
-                    badge_translation += (m.badge_size + (m.badge_size / 6))
-                end if
+sub applyLayout()
+    if m.content = invalid then return
+    width = m.top.width
+    height = m.top.height
+    m.fontSize = m.top.fontSize
+    if m.fontSize < 8 then m.fontSize = 14
+
+    m.padX = 8
+    m.right = width - m.padX
+    m.measureRegular = createText("", m.regularFont, m.textColor)
+    m.measureBold = createText("", m.boldFont, m.textColor)
+    m.widthCache = {}
+    m.widthCache.SetModeCaseSensitive()
+    m.boldWidthCache = {}
+    m.boldWidthCache.SetModeCaseSensitive()
+    m.cachedWidths = 0
+
+    m.lineH = measureHeight("Ag")
+    m.spaceW = measureText("a a", false) - measureText("aa", false)
+    if m.spaceW <= 0 then m.spaceW = m.fontSize * 0.3
+    m.emoteH = Int(m.fontSize * 1.8 + 0.5)
+    m.badgeH = Int(m.fontSize * 1.3 + 0.5)
+    m.emojiH = Int(m.fontSize * 1.3 + 0.5)
+    m.lineGap = 2
+    m.rowGap = Int(m.fontSize * 0.5 + 0.5)
+    m.maxRows = Int(height / (m.lineH + m.rowGap)) + 2
+
+    m.background.width = width
+    m.background.height = height
+    m.panel.clippingRect = [0, 0, width, height]
+    redraw()
+end sub
+
+sub onVisibleChange()
+    if m.top.visible
+        redraw()
+    else
+        clearRows() ' frees nodes and stops animations while chat is hidden
+    end if
+end sub
+
+sub onChatMessages(event as object)
+    batch = event.getData()
+    if batch = invalid then return
+    ' During a flood only the newest rows that fit on screen are worth drawing.
+    firstToDraw = 0
+    shown = 0
+    for i = batch.Count() - 1 to 0 step -1
+        kind = batch[i].kind
+        if kind <> "clear" and kind <> "delete"
+            shown = shown + 1
+            if shown > m.maxRows
+                firstToDraw = i + 1
+                exit for
             end if
         end if
     end for
-    return group
+
+    visible = m.top.visible
+    for i = 0 to batch.Count() - 1
+        item = batch[i]
+        if item.kind = "clear"
+            clearMessages(item.login)
+        else if item.kind = "delete"
+            deleteMessage(item.id)
+        else
+            remember(item)
+            if visible and i >= firstToDraw then drawRow(item)
+        end if
+    end for
+end sub
+
+sub remember(item as object)
+    m.recent.Push(item)
+    if m.recent.Count() > 100 then m.recent.Shift()
+end sub
+
+' CLEARCHAT: dims a timed-out/banned user's messages, or wipes chat when login is "".
+sub clearMessages(login as string)
+    if login = ""
+        m.recent = []
+        clearRows()
+        item = { kind: "system", text: "Chat was cleared by a moderator.", id: "", login: "" }
+        remember(item)
+        if m.top.visible then drawRow(item)
+        return
+    end if
+    for each item in m.recent
+        if item.login = login then item.deleted = true
+    end for
+    for each row in m.rows
+        if row.login = login then row.node.opacity = 0.35
+    end for
+end sub
+
+' CLEARMSG: dims a single deleted message.
+sub deleteMessage(id as string)
+    for each item in m.recent
+        if item.id = id then item.deleted = true
+    end for
+    for each row in m.rows
+        if row.id = id then row.node.opacity = 0.35
+    end for
+end sub
+
+sub redraw()
+    clearRows()
+    if not m.top.visible then return
+    first = m.recent.Count() - m.maxRows
+    if first < 0 then first = 0
+    for i = first to m.recent.Count() - 1
+        drawRow(m.recent[i])
+    end for
+end sub
+
+sub clearRows()
+    m.content.removeChildrenIndex(m.content.getChildCount(), 0)
+    m.rows = []
+    m.animated = []
+    m.contentBottom = 0
+    m.content.translation = [0, m.top.height]
+end sub
+
+' Appends a message below the others and scrolls by moving the content group, so older
+' rows never need repositioning.
+sub drawRow(item as object)
+    row = buildRow(item)
+    row.y = m.contentBottom
+    row.node.translation = [0, row.y]
+    m.content.appendChild(row.node)
+    m.contentBottom = m.contentBottom + row.h
+    m.rows.Push(row)
+    trackAnimations(row.anims)
+    pruneRows()
+    m.content.translation = [0, m.top.height - m.contentBottom]
+end sub
+
+sub pruneRows()
+    visibleTop = m.contentBottom - m.top.height
+    while m.rows.Count() > 0
+        row = m.rows[0]
+        if row.y + row.h > visibleTop and m.rows.Count() <= m.maxRows * 2 then exit while
+        m.rows.Shift()
+        m.content.removeChild(row.node)
+        releaseAnimations(row.anims)
+    end while
+    ' Keep coordinates small during long sessions.
+    if m.rows.Count() > 0 and m.rows[0].y > 100000
+        offset = m.rows[0].y
+        for each row in m.rows
+            row.y = row.y - offset
+            row.node.translation = [0, row.y]
+        end for
+        m.contentBottom = m.contentBottom - offset
+    end if
+end sub
+
+' Keeps at most animLimit emotes animating; the oldest ones become still images.
+sub trackAnimations(anims as object)
+    for each entry in anims
+        m.animated.Push(entry)
+    end for
+    while m.animated.Count() > m.animLimit
+        freezeAnimation(m.animated.Shift())
+    end while
+end sub
+
+sub freezeAnimation(entry as object)
+    if entry.dead then return
+    entry.dead = true
+    animatedNode = entry.node
+    poster = CreateObject("roSGNode", "Poster")
+    poster.loadDisplayMode = "scaleToFit"
+    poster.width = animatedNode.width
+    poster.height = animatedNode.height
+    poster.translation = animatedNode.translation
+    poster.uri = entry.still
+    entry.parent.replaceChild(poster, entry.index)
+end sub
+
+sub releaseAnimations(anims as object)
+    if anims.Count() = 0 then return
+    for each entry in anims
+        entry.dead = true
+    end for
+    playing = []
+    for each entry in m.animated
+        if not entry.dead then playing.Push(entry)
+    end for
+    m.animated = playing
+end sub
+
+' Lays out one message: [badges] Name: text emote text... wrapped to the panel width.
+function buildRow(item as object) as object
+    group = CreateObject("roSGNode", "Group")
+    layout = {
+        group: group,
+        x: m.padX,
+        indent: m.padX,
+        top: 0,
+        lineH: m.lineH,
+        items: [],
+        first: true,
+        run: "",
+        runX: 0,
+        runColor: "",
+        lastEmote: invalid,
+        anims: []
+    }
+
+    highlight = invalid
+    accent = invalid
+    if item.kind = "notice"
+        ' Created first so the indexes recorded for animated emotes stay valid.
+        highlight = CreateObject("roSGNode", "Rectangle")
+        highlight.color = m.noticeBackground
+        group.appendChild(highlight)
+        accent = CreateObject("roSGNode", "Rectangle")
+        accent.color = m.noticeColor
+        group.appendChild(accent)
+        layout.indent = m.padX + 4
+        layout.x = layout.indent
+        if item.notice <> ""
+            layoutText(layout, item.notice, m.mutedColor, false)
+            if item.tokens.Count() > 0 then newLine(layout)
+        end if
+    end if
+
+    if item.kind = "system"
+        layoutText(layout, item.text, m.mutedColor, false)
+    else if item.tokens.Count() > 0
+        layoutSender(layout, item)
+        textColor = m.textColor
+        if item.action then textColor = item.color
+        for each token in item.tokens
+            if token.text <> invalid
+                color = textColor
+                if token.link = true then color = m.linkColor
+                layoutText(layout, token.text, color, token.glue = true)
+            else
+                layoutImage(layout, token)
+            end if
+        end for
+    end if
+    finishLine(layout)
+
+    height = layout.top + layout.lineH
+    if highlight <> invalid
+        highlight.width = m.top.width
+        highlight.height = height + m.rowGap
+        highlight.translation = [0, 0 - m.rowGap / 2]
+        accent.width = 3
+        accent.height = height + m.rowGap
+        accent.translation = [0, 0 - m.rowGap / 2]
+    end if
+    if item.deleted = true then group.opacity = 0.35
+    return { node: group, h: height + m.rowGap, id: item.id, login: item.login, anims: layout.anims }
 end function
 
-function buildEmote(posterUri)
-    poster = createObject("roSGNode", "Poster")
-    poster.uri = posterUri
-    poster.visible = true
-    bounding_rect = poster.localBoundingRect()
-    poster_width = bounding_rect.width
-    poster_height = bounding_rect.height
-    ratio = 1
-    if poster_height <> 0
-        ratio = m.badge_size / poster_height
-        poster.height = (poster_height * ratio)
-    else
-        poster.height = m.badge_size
+sub layoutSender(layout as object, item as object)
+    for each url in item.badges
+        badge = CreateObject("roSGNode", "Poster")
+        badge.loadDisplayMode = "scaleToFit"
+        badge.width = m.badgeH
+        badge.height = m.badgeH
+        badge.uri = url
+        addNode(layout, badge, m.badgeH, m.badgeH, 3)
+    end for
+    name = item.name
+    if not item.action then name = name + ":"
+    label = createText(name, m.boldFont, item.color)
+    addNode(layout, label, wordWidth(name, true), m.lineH, 4)
+end sub
+
+sub layoutText(layout as object, text as string, color as string, glue as boolean)
+    for each word in text.Split(" ")
+        if word <> ""
+            addWord(layout, word, color, glue)
+            glue = false
+        end if
+    end for
+end sub
+
+' Adds a word to the current text run (one label per run of same-colored words on a line).
+sub addWord(layout as object, word as string, color as string, glue as boolean)
+    w = wordWidth(word, false)
+    gap = m.spaceW
+    if layout.first or glue then gap = 0
+    if not layout.first and layout.x + gap + w > m.right
+        newLine(layout)
+        gap = 0
     end if
-    if poster_width <> 0
-        poster.width = (poster_width * ratio)
+    if layout.x + gap + w > m.right
+        breakWord(layout, word, color) ' wider than a whole line (long links, spam)
+        return
+    end if
+    if layout.run <> "" and layout.runColor = color
+        if gap > 0
+            layout.run = layout.run + " " + word
+        else
+            layout.run = layout.run + word
+        end if
     else
-        poster.width = m.badge_size
+        flushRun(layout)
+        layout.run = word
+        layout.runX = layout.x + gap
+        layout.runColor = color
+    end if
+    layout.x = layout.x + gap + w
+    layout.first = false
+    layout.lastEmote = invalid
+end sub
+
+sub breakWord(layout as object, word as string, color as string)
+    flushRun(layout)
+    rest = word
+    while rest <> ""
+        count = fitChars(rest, m.right - layout.x)
+        piece = rest.Left(count)
+        label = createText(piece, m.regularFont, color)
+        layout.group.appendChild(label)
+        layout.items.Push({ node: label, x: layout.x, h: m.lineH })
+        layout.x = layout.x + measureText(piece, false)
+        layout.first = false
+        rest = rest.Mid(count)
+        if rest <> "" then newLine(layout)
+    end while
+    layout.lastEmote = invalid
+end sub
+
+' Longest prefix of text (at least one character) that fits in width.
+function fitChars(text as string, width as float) as integer
+    low = 1
+    high = text.Len()
+    while low < high
+        middle = (low + high + 1) \ 2
+        if measureText(text.Left(middle), false) <= width
+            low = middle
+        else
+            high = middle - 1
+        end if
+    end while
+    return low
+end function
+
+sub layoutImage(layout as object, token as object)
+    h = m.emoteH
+    if token.emoji = true then h = m.emojiH
+    sourceW = token.w
+    sourceH = token.h
+    if token.unsized = true
+        size = m.emoteSizes[token.url]
+        if size <> invalid
+            sourceW = size.w
+            sourceH = size.h
+        end if
+    end if
+    w = h
+    if sourceW > 0 and sourceH > 0 then w = Int(sourceW * h / sourceH + 0.5)
+
+    node = createEmote(token, w, h)
+    base = layout.lastEmote
+    if token.zw = true and base <> invalid
+        ' Zero-width emotes (hats, rain, steering wheels...) sit centered on the previous emote.
+        layout.group.appendChild(node)
+        layout.items.Push({ node: node, x: base.x + (base.w - w) / 2, h: h })
+        if h > layout.lineH then layout.lineH = h
+    else
+        gap = m.spaceW
+        if token.glue = true then gap = 0
+        x = addNode(layout, node, w, h, gap)
+        layout.lastEmote = { x: x, w: w }
+    end if
+    if node.subtype() = "AnimatedImage"
+        layout.anims.Push({ node: node, parent: layout.group, index: layout.group.getChildCount() - 1, still: token.url, dead: false })
+    end if
+end sub
+
+function createEmote(token as object, w as float, h as float) as object
+    if token.anim <> invalid and m.animLimit > 0
+        ' bs:disable-next-line: 1128
+        animated = CreateObject("roSGNode", "AnimatedImage")
+        if animated <> invalid
+            animated.width = w
+            animated.height = h
+            animated.loadingBitmapUri = token.url
+            animated.failedBitmapUri = token.url
+            animated.mimeType = "video/webp"
+            animated.uri = token.anim
+            animated.control = "loop"
+            return animated
+        end if
+    end if
+    poster = CreateObject("roSGNode", "Poster")
+    poster.loadDisplayMode = "scaleToFit"
+    poster.width = w
+    poster.height = h
+    poster.uri = token.url
+    if token.unsized = true and not m.emoteSizes.DoesExist(token.url)
+        poster.observeField("loadStatus", "onEmoteLoaded")
     end if
     return poster
 end function
 
-function buildUsername(display_name, color)
-    username = createObject("roSGNode", "SimpleLabel")
-    username.text = display_name
-    if color = ""
-        color = "FFFFFF"
+' Learns the real size of emotes whose provider doesn't report one (BTTV) so later
+' messages draw them at the right aspect ratio.
+sub onEmoteLoaded(event as object)
+    poster = event.getRoSGNode()
+    status = event.getData()
+    if status = "ready" and poster.bitmapHeight > 0
+        m.emoteSizes[poster.uri] = { w: poster.bitmapWidth, h: poster.bitmapHeight }
     end if
-    username.color = "0x" + color + "FF"
-    username.visible = true
-    username.fontSize = m.font_size
-    username.fontUri = "pkg:/fonts/Archivo-Bold.otf"
-    return username
-end function
-
-function buildColon()
-    colon = createObject("roSGNode", "SimpleLabel")
-    colon.fontSize = m.font_size
-    colon.fontUri = "pkg:/fonts/Archivo-Regular.otf"
-    colon.color = "0xFFFFFFFF"
-    colon.visible = true
-    colon.text = ": "
-    return colon
-end function
-
-function wordOrImage(word, isUrl = false)
-    if m.global.emoteCache.DoesExist(word)
-        return buildEmote(m.global.emoteCache[word])
-    else
-        message_text = createObject("roSGNode", "SimpleLabel")
-        message_text.fontSize = m.font_size
-        message_text.fontUri = "pkg:/fonts/Archivo-Regular.otf"
-        message_text.visible = true
-        message_text.text = word + " "
-        if isUrl
-            message_text.color = m.global.constants.colors.twitch.purple9
-        end if
-        return message_text
+    if status = "ready" or status = "failed"
+        poster.unobserveField("loadStatus")
     end if
-end function
-
-function buildMessage(message, x_translation)
-    message_group = createObject("roSGNode", "Group")
-    words = message.Split(" ")
-    line_available_space = m.right_bound - x_translation
-    current_line = 0
-    for each word in words
-        if asc(word.right(1)) = 917504
-            word = word.mid(0, (word.len() - 1))
-            ? "Found invalid character"
-        end if
-        ' Make room for emotes just in case
-        urlRegex = createObject("roRegex", "https?:\/\/[a-zA-Z0-9\.]+", "i")
-        isUrl = urlRegex.IsMatch(word)
-
-        block = wordOrImage(word, isUrl)
-        block_width = block.localBoundingRect().width
-        if block_width > m.right_bound
-            ? "break it up!"
-            block = createObject("roSGNode", "Group")
-            charTranslation = 0
-            charLine = 0
-            charLineAvailableSpace = m.right_bound - x_translation
-            for each char in word.split("")
-                charNode = createObject("roSGNode", "SimpleLabel")
-                charNode.fontSize = m.font_size
-                charNode.fontUri = "pkg:/fonts/Archivo-Regular.otf"
-                charNode.visible = true
-                charNode.text = char
-                if isUrl
-                    charNode.color = m.global.constants.colors.twitch.purple9
-                end if
-                charWidth = charNode.localBoundingRect().width
-                if (charLineAvailableSpace - charWidth) < 0
-                    charLine++
-                    charLineAvailableSpace = m.right_bound - m.left_bound
-                    charTranslation = 0 - x_translation + m.left_bound
-                end if
-                charNode.translation = [(charTranslation), (charLine * (m.badge_size + m.line_gap))]
-                charLineAvailableSpace -= charWidth
-                charTranslation += charWidth
-                block.appendChild(charNode)
-            end for
-            block_width = block.localBoundingRect().width
-        else if line_available_space - block_width <= 0
-            current_line++
-            line_available_space = m.right_bound - m.left_bound
-        end if
-        block.translation = [(m.right_bound - line_available_space), (current_line * (m.badge_size + m.line_gap))]
-        if block_width = 0
-            block_width = m.badge_size
-        end if
-        line_available_space -= block_width
-        message_group.appendChild(block)
-    end for
-    return message_group
-end function
-
-sub onNewCommentObj()
-    m.chat.readyForNextComment = false
-    if m.chat.nextCommentObj <> invalid
-        comment = m.chat.nextCommentObj
-        display_name = comment.tags.display_name
-        message = comment.parameters.trim()
-        color = ""
-        if comment?.tags?.color <> invalid
-            color = comment.tags.color.replace("#", "")
-        end if
-        badges = []
-        if comment?.tags?.badges <> invalid
-            for each key in comment.tags.badges
-                badgeID = key
-                badges.push(badgeID)
-            end for
-        end if
-        emote_set = {}
-        if comment?.tags?.emotes <> invalid
-            for each emote in comment.tags.emotes.Items()
-                value = { starts: [], length: 0 }
-                for each emote_instance in emote.value
-                    value.starts.push(Val(emote_instance.startposition))
-                    value.length = (Val(emote_instance.endposition) - Val(emote_instance.startposition)) + 1
-                end for
-                emote_set[emote.key] = value
-            end for
-        end if
-
-        quoteRegex = createObject("roRegex", "[\x{2018}\x{2019}]", "")
-        message = quoteRegex.replace(message, "'")
-        for each emoticon in emote_set.Items()
-            e_start = emoticon.value.starts[0]
-            emote_word = Mid(message, (e_start + 1), emoticon.value.length)
-            if not m.global.emoteCache.DoesExist(emote_word)
-                emoteCache = m.global.emoteCache
-                if not emoteCache.DoesExist(emote_word)
-                    emoteCache[emote_word] = "https://static-cdn.jtvnw.net/emoticons/v2/" + emoticon.key + "/static/light/1.0"
-                end if
-                m.global.setField("emoteCache", emoteCache)
-            end if
-        end for
-
-        if display_name = "" or message = ""
-            m.chat.readyForNextComment = true
-            return
-        end if
-
-        x_translation = m.left_bound
-
-        badge_group = buildBadges(badges)
-        badge_group.translation = [x_translation, 0]
-        x_translation += badge_group.localBoundingRect().width + 1
-
-        username = buildUsername(display_name, color)
-        username.translation = [x_translation, 0]
-        x_translation += username.localBoundingRect().width + 1
-
-        colon = buildColon()
-        colon.translation = [x_translation, 0]
-        x_translation += colon.localBoundingRect().width + 1
-
-        message_group = buildMessage(message, x_translation)
-        message_group.translation = [0, 0]
-        x_translation += message_group.localBoundingRect().width + 1
-
-        group = createObject("roSGNode", "Group")
-
-        group.appendChild(badge_group)
-        group.appendChild(username)
-        group.appendChild(colon)
-        group.appendChild(message_group)
-        group.translation = [m.left_bound, m.translation]
-        m.chatPanel.appendChild(group)
-        y_translation = group.localBoundingRect().height + m.line_gap
-        if m.translation + y_translation > m.chatPanel.height
-            for each chatmessage in m.chatPanel.getChildren(-1, 0)
-                if (chatmessage.translation[1] + chatmessage.localBoundingRect().height) < 0 ' Wait until it's off the screen to remove it.
-                    m.chatPanel.removeChild(chatmessage)
-                else
-                    chatmessage.translation = [chatmessage.translation[0], (chatmessage.translation[1] - y_translation)]
-                end if
-            end for
-        else
-            m.translation += (y_translation)
-        end if
-    end if
-    m.chat.readyForNextComment = true
 end sub
 
-sub onDestroy()
-    m.chat = destroyTask(m.chat, "nextCommentObj")
-    if m.EmoteJob <> invalid
-        m.EmoteJob.control = "stop"
-        m.EmoteJob = invalid
+' Places a fixed-size node on the current line, wrapping first if it doesn't fit.
+' Returns the x it was placed at.
+function addNode(layout as object, node as object, w as float, h as float, gap as float) as float
+    flushRun(layout)
+    if layout.first then gap = 0
+    if not layout.first and layout.x + gap + w > m.right
+        newLine(layout)
+        gap = 0
     end if
+    x = layout.x + gap
+    layout.group.appendChild(node)
+    layout.items.Push({ node: node, x: x, h: h })
+    layout.x = x + w
+    if h > layout.lineH then layout.lineH = h
+    layout.first = false
+    layout.lastEmote = invalid
+    return x
+end function
+
+sub flushRun(layout as object)
+    if layout.run = "" then return
+    label = createText(layout.run, m.regularFont, layout.runColor)
+    layout.group.appendChild(label)
+    layout.items.Push({ node: label, x: layout.runX, h: m.lineH })
+    layout.run = ""
+end sub
+
+sub newLine(layout as object)
+    finishLine(layout)
+    layout.top = layout.top + layout.lineH + m.lineGap
+    layout.lineH = m.lineH
+    layout.items = []
+    layout.x = layout.indent
+    layout.first = true
+    layout.lastEmote = invalid
+end sub
+
+' Vertically centers everything placed on the current line.
+sub finishLine(layout as object)
+    flushRun(layout)
+    for each placed in layout.items
+        placed.node.translation = [placed.x, layout.top + (layout.lineH - placed.h) / 2]
+    end for
+end sub
+
+function createText(text as string, font as string, color as string) as object
+    label = CreateObject("roSGNode", "SimpleLabel")
+    label.fontUri = font
+    label.fontSize = m.fontSize
+    label.color = color
+    label.text = text
+    return label
+end function
+
+function measureText(text as string, bold as boolean) as float
+    label = m.measureRegular
+    if bold then label = m.measureBold
+    label.text = text
+    width = 0
+    try
+        width = label.localBoundingRect().width
+    catch e
+        width = text.Len() * m.fontSize * 0.55
+    end try
+    return width
+end function
+
+function measureHeight(text as string) as float
+    m.measureRegular.text = text
+    height = 0
+    try
+        height = m.measureRegular.localBoundingRect().height
+    catch e
+        height = 0
+    end try
+    if height <= 0 then height = m.fontSize * 1.3
+    return height
+end function
+
+' Word widths repeat constantly in chat (names, emote codes, "LUL"), so cache them.
+function wordWidth(word as string, bold as boolean) as float
+    cache = m.widthCache
+    if bold then cache = m.boldWidthCache
+    width = cache[word]
+    if width = invalid
+        if m.cachedWidths > 4000
+            m.widthCache.Clear()
+            m.boldWidthCache.Clear()
+            m.cachedWidths = 0
+        end if
+        width = measureText(word, bold)
+        cache[word] = width
+        m.cachedWidths = m.cachedWidths + 1
+    end if
+    return width
+end function
+
+sub onDestroy()
+    stopJobs()
+    m.top.unobserveField("visible")
 end sub

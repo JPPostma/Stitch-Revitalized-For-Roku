@@ -40,6 +40,8 @@ source/                    # BrightScript utilities and entry point
   constants.brs            # Global constants, design tokens, color palettes
   utils/                   # Shared utility functions
     array.brs              # Array utility functions
+    chatEmotes.brs         # 7TV/BTTV/FFZ emote and Twitch badge parsers for chat
+    chatParser.brs         # Twitch IRC parsing and chat message tokenizing (emotes, emoji)
     config.brs             # Registry (persistent storage) accessors
     deviceCapabilities.brs # Device/codec detection (HEVC, AV1, HDR, bitrate)
     globals.brs            # Simple key-value global state
@@ -70,7 +72,7 @@ components/                # SceneGraph components (XML + BRS pairs)
     MenuBar/               # Top horizontal menu bar (Following, Discover, LiveChannels, Categories)
     FollowedStreamsBar/    # Left sidebar showing followed live streams (with SidebarItem)
     VideoItem/             # Stream/VOD/clip card with thumbnail, labels, badges
-    Chat/                  # Twitch chat overlay (IRC-based, with ChatJob + EmoteJob)
+    Chat/                  # Twitch chat overlay (ChatJob task: IRC + emotes/badges/history; Chat: renderer)
     CirclePoster/          # Circular avatar component
     EmojiLabel/            # Label with inline emoji rendering via regex
     ChannelMenu/           # Channel action menu overlay

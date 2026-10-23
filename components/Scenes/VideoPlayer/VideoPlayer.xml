@@ -23,8 +23,7 @@
         <Chat
             id="chat"
             visible="false"
-            translation="[960,0]"
-            forceLive="false" />
+            translation="[960,0]" />
         <TwitchApiTask
             functionName="getTwitchBookmarks"
             control="run"
