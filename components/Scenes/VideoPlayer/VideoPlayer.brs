@@ -166,6 +166,8 @@ sub playContent(isRecovery = false as boolean)
         m.video.unobserveField("QualityChangeRequestFlag") ' StitchVideo specific
         m.video.unobserveField("qualityChangeRequest") ' StitchVideo specific
         m.video.unobserveField("streamingSegment") ' live only, for Chat Sync
+        m.video.unobserveField("chatSyncAdjusting") ' StitchVideo specific
+        m.video.unobserveField("chatSyncStep") ' StitchVideo specific
         m.video.unobserveField("position")
         m.video.unobserveField("state")
         m.video.unobserveField("duration")
@@ -173,6 +175,7 @@ sub playContent(isRecovery = false as boolean)
 
         m.top.removeChild(m.video)
         m.video = invalid
+        if m.chatWindow <> invalid then m.chatWindow.syncPanelVisible = false
     end if
 
     isLiveContent = (m.top.contentRequested.contentType = "LIVE")
@@ -235,6 +238,8 @@ sub playContent(isRecovery = false as boolean)
     if isLiveContent
         m.video.observeField("QualityChangeRequestFlag", "onQualityChangeRequested") ' StitchVideo specific
         m.video.observeField("streamingSegment", "onStreamingSegment")
+        m.video.observeField("chatSyncAdjusting", "onChatSyncAdjusting")
+        m.video.observeField("chatSyncStep", "onChatSyncStep")
     else
         m.video.observeField("back", "onVideoBack") ' CustomVideo specific
     end if
@@ -358,6 +363,8 @@ sub exitPlayer()
         if m.video.isSubtype("StitchVideo")
             m.video.unobserveField("QualityChangeRequestFlag")
             m.video.unobserveField("streamingSegment")
+            m.video.unobserveField("chatSyncAdjusting")
+            m.video.unobserveField("chatSyncStep")
         else if m.video.isSubtype("CustomVideo")
             m.video.unobserveField("back")
         end if
@@ -436,6 +443,19 @@ sub onStreamingSegment()
     if seg <> invalid and seg.latency <> invalid and seg.latency >= 0
         m.chatWindow.videoLatency = seg.latency
     end if
+end sub
+
+' The player's Chat Sync button: chat shows its sync panel (and appears, if it was hidden)
+' while the adjuster is open, and each 1-second step goes straight to it.
+sub onChatSyncAdjusting()
+    if m.chatWindow = invalid or m.video = invalid then return
+    adjusting = m.video.chatSyncAdjusting
+    if adjusting and not m.chatWindow.visible then m.chatWindow.visible = true
+    m.chatWindow.syncPanelVisible = adjusting
+end sub
+
+sub onChatSyncStep()
+    if m.chatWindow <> invalid and m.video <> invalid then m.chatWindow.syncStep = m.video.chatSyncStep
 end sub
 
 sub onToggleChat()

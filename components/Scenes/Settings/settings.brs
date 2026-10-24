@@ -283,6 +283,8 @@ sub radioSettingChanged()
     selectedOption = m.radioSetting.content.getChild(m.radioSetting.checkedItem)
     if selectedOption = invalid then return
     set_user_setting(selectedSetting.settingName, selectedOption.id)
+    ' A newly picked Chat Sync starts without the player's earlier/later steps.
+    if selectedSetting.settingName = "ChatSync" then set_user_setting("ChatSyncOffset", "0")
 end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean

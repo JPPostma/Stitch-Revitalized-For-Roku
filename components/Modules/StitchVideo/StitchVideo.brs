@@ -23,6 +23,7 @@ sub init()
     ' Focus backgrounds
     m.backFocus = m.top.findNode("backFocus")
     m.chatFocus = m.top.findNode("chatFocus")
+    m.chatSyncFocus = m.top.findNode("chatSyncFocus")
     m.playPauseFocus = m.top.findNode("playPauseFocus")
     m.qualityFocus = m.top.findNode("qualityFocus")
 
@@ -44,7 +45,7 @@ sub init()
     m.qualityDialog.observeFieldScopedEx("buttonSelected", "onQualityButtonSelect")
 
     ' State variables
-    m.currentFocusedButton = 2 ' 0=back, 1=chat, 2=play/pause, 3=quality
+    m.currentFocusedButton = 3 ' 0=back, 1=chat, 2=chat sync, 3=play/pause, 4=quality
     m.isOverlayVisible = false
     m.currentPositionSeconds = 0
     m.isLiveStream = true ' StitchVideo is always for live streams
@@ -55,6 +56,13 @@ sub init()
     m.fadeAwayTimer.repeat = false
     m.fadeAwayTimer.duration = 5
     m.fadeAwayTimer.control = "stop"
+
+    ' Closes the Chat Sync adjuster after a few seconds without a nudge.
+    m.chatSyncTimer = createObject("roSGNode", "Timer")
+    m.chatSyncTimer.observeField("fire", "endChatSyncAdjust")
+    m.chatSyncTimer.repeat = false
+    m.chatSyncTimer.duration = 8
+    m.chatSyncTimer.control = "stop"
 
     ' Live-edge latency diagnostic timer.
     ' Logs streamingSegment.latency every 5s while the stream is active
@@ -465,9 +473,11 @@ sub focusButton(buttonIndex)
         m.backFocus.visible = true
     else if buttonIndex = 1 ' Chat
         m.chatFocus.visible = true
-    else if buttonIndex = 2 ' Play/Pause
+    else if buttonIndex = 2 ' Chat Sync
+        m.chatSyncFocus.visible = true
+    else if buttonIndex = 3 ' Play/Pause
         m.playPauseFocus.visible = true
-    else if buttonIndex = 3 ' Quality
+    else if buttonIndex = 4 ' Quality
         m.qualityFocus.visible = true
     end if
 end sub
@@ -475,6 +485,7 @@ end sub
 sub clearAllButtonFocus()
     m.backFocus.visible = false
     m.chatFocus.visible = false
+    m.chatSyncFocus.visible = false
     m.playPauseFocus.visible = false
     m.qualityFocus.visible = false
 end sub
@@ -491,12 +502,44 @@ sub executeButtonAction()
     else if m.currentFocusedButton = 1 ' Chat
         m.top.toggleChat = true
         m.top.streamLayoutMode = (m.top.streamLayoutMode + 1) mod 3
-    else if m.currentFocusedButton = 2 ' Play/Pause
+    else if m.currentFocusedButton = 2 ' Chat Sync
+        startChatSyncAdjust()
+    else if m.currentFocusedButton = 3 ' Play/Pause
         togglePlayPause()
-    else if m.currentFocusedButton = 3 ' Quality
+    else if m.currentFocusedButton = 4 ' Quality
         showQualityDialog()
     end if
 end sub
+
+' Chat Sync: the controls step aside so video and chat are both in view, and left/right
+' show chat a second earlier or later (Chat draws the panel with the current setting).
+sub startChatSyncAdjust()
+    hideOverlay()
+    m.fadeAwayTimer.control = "stop"
+    m.top.chatSyncAdjusting = true
+    m.chatSyncTimer.control = "start"
+end sub
+
+sub endChatSyncAdjust()
+    m.chatSyncTimer.control = "stop"
+    m.top.chatSyncAdjusting = false
+end sub
+
+' Left/right nudge the delay; any other key closes the adjuster.
+function handleChatSyncKey(key) as boolean
+    if key = "left" or key = "right"
+        if key = "left"
+            m.top.chatSyncStep = -1
+        else
+            m.top.chatSyncStep = 1
+        end if
+        m.chatSyncTimer.control = "stop"
+        m.chatSyncTimer.control = "start"
+    else
+        endChatSyncAdjust()
+    end if
+    return true
+end function
 
 sub togglePlayPause()
     if m.top.state = "paused"
@@ -634,6 +677,8 @@ function onKeyEvent(key, press) as boolean
     ' ? "[StitchVideo] KeyEvent: "; key; " "; press
 
     if press
+        if m.top.chatSyncAdjusting then return handleChatSyncKey(key)
+
         ' If quality dialog is visible, only handle back to close it
         if m.qualityDialog.visible
             if key = "back" or key = "down"
@@ -681,16 +726,16 @@ function handleMainKeys(key) as boolean
     end if
 
     if key = "left"
-        ' Live stream navigation: back(0) -> chat(1) -> play/pause(2) -> quality(3)
+        ' Live stream navigation: back(0) -> chat(1) -> chat sync(2) -> play/pause(3) -> quality(4)
         if m.currentFocusedButton > 0
             focusButton(m.currentFocusedButton - 1)
         else
-            focusButton(3) ' Wrap to quality
+            focusButton(4) ' Wrap to quality
         end if
         return true
     else if key = "right"
-        ' Live stream navigation: back(0) -> chat(1) -> play/pause(2) -> quality(3)
-        if m.currentFocusedButton < 3
+        ' Live stream navigation: back(0) -> chat(1) -> chat sync(2) -> play/pause(3) -> quality(4)
+        if m.currentFocusedButton < 4
             focusButton(m.currentFocusedButton + 1)
         else
             focusButton(0) ' Wrap to back
@@ -714,6 +759,10 @@ sub onDestroy()
     if m.fadeAwayTimer <> invalid
         m.fadeAwayTimer.control = "stop"
         m.fadeAwayTimer.unobserveField("fire")
+    end if
+    if m.chatSyncTimer <> invalid
+        m.chatSyncTimer.control = "stop"
+        m.chatSyncTimer.unobserveField("fire")
     end if
     if m.messageTimer <> invalid
         m.messageTimer.control = "stop"

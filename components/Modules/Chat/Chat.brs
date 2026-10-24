@@ -39,6 +39,9 @@ sub init()
     m.syncMode = "auto"
     m.latencySamples = []
     m.chatDelayMs = 0
+    m.syncOffset = 0 ' whole seconds added by the player's Chat Sync adjuster
+    m.syncOffsetSaved = 0
+    m.syncPanel = invalid
 
     m.top.observeField("visible", "onVisibleChange")
     applyLayout()
@@ -63,7 +66,9 @@ sub onEnterChannel()
     else
         m.chatDelayMs = m.syncMode.ToInt() * 1000
     end if
-    m.chatJob.delayMs = m.chatDelayMs
+    m.syncOffset = settingNumber("ChatSyncOffset", "0")
+    m.syncOffsetSaved = m.syncOffset
+    m.chatJob.delayMs = chatDelay()
     m.chatJob.history = get_user_setting("ChatHistory", "true") = "true"
     m.chatJob.providers = {
         seventv: get_user_setting("7tvEmote", "true") = "true",
@@ -86,9 +91,96 @@ sub onVideoLatency()
     m.latencySamples.Push(latency)
     if m.latencySamples.Count() > 5 then m.latencySamples.Shift()
     median = medianOf(m.latencySamples)
-    if Abs(median - m.chatDelayMs) < 1000 then return
+    if Abs(median - m.chatDelayMs) < 500 then return
     m.chatDelayMs = median
-    if m.chatJob <> invalid then m.chatJob.delayMs = median
+    if m.chatJob <> invalid then m.chatJob.delayMs = chatDelay()
+    updateSyncPanel()
+end sub
+
+' Settings → Chat Sync (the measured delay, or a fixed one) plus the player's 1-second steps.
+function chatDelay() as integer
+    delay = m.chatDelayMs + m.syncOffset * 1000
+    if delay < 0 then delay = 0
+    return delay
+end function
+
+sub onSyncStep()
+    seconds = m.top.syncStep
+    if seconds = 0 then return
+    offset = m.syncOffset + seconds
+    ' Chat can't be shown before it's sent, so stop at no delay at all.
+    if offset < -60 or offset > 60 or m.chatDelayMs + offset * 1000 < 0 then return
+    m.syncOffset = offset
+    if m.chatJob <> invalid then m.chatJob.delayMs = chatDelay()
+    updateSyncPanel()
+end sub
+
+sub onSyncPanelVisible()
+    if m.top.syncPanelVisible
+        if m.syncPanel = invalid then m.syncPanel = createSyncPanel()
+        updateSyncPanel()
+        m.syncPanel.visible = true
+    else
+        if m.syncPanel <> invalid then m.syncPanel.visible = false
+        saveSyncOffset()
+    end if
+end sub
+
+sub saveSyncOffset()
+    if m.syncOffset = m.syncOffsetSaved then return
+    set_user_setting("ChatSyncOffset", m.syncOffset.ToStr())
+    m.syncOffsetSaved = m.syncOffset
+end sub
+
+' Panel at the top of chat (newest messages stay visible at the bottom):
+'   CHAT SYNC
+'   ←      Auto +2s      →
+'   Chat delay 21.4s · OK when done
+function createSyncPanel() as object
+    width = m.top.width - 16
+    panel = CreateObject("roSGNode", "Group")
+    panel.translation = [8, 8]
+    background = panel.createChild("Rectangle")
+    background.width = width
+    background.height = 78
+    background.color = "0x0E0E10FF"
+    accent = panel.createChild("Rectangle")
+    accent.width = width
+    accent.height = 2
+    accent.color = m.noticeColor
+    panel.appendChild(syncText("CHAT SYNC", m.boldFont, 12, m.linkColor, 12, 10, "left"))
+    panel.appendChild(syncText("←", m.boldFont, 20, m.textColor, 14, 30, "left"))
+    panel.appendChild(syncText("→", m.boldFont, 20, m.textColor, width - 14, 30, "right"))
+    m.syncValue = syncText("", m.boldFont, 20, m.textColor, width / 2, 30, "center")
+    panel.appendChild(m.syncValue)
+    m.syncHint = syncText("", m.regularFont, 12, m.mutedColor, width / 2, 58, "center")
+    panel.appendChild(m.syncHint)
+    m.top.appendChild(panel)
+    return panel
+end function
+
+function syncText(text as string, font as string, size as integer, color as string, x as float, y as float, origin as string) as object
+    label = createText(text, font, color)
+    label.fontSize = size
+    label.horizOrigin = origin
+    label.translation = [x, y]
+    return label
+end function
+
+sub updateSyncPanel()
+    if m.syncPanel = invalid then return
+    if m.syncMode = "auto"
+        label = "Auto"
+    else if m.syncMode = "0"
+        label = "Real time"
+    else
+        label = m.syncMode + "s"
+    end if
+    if m.syncOffset > 0 then label = label + " +" + m.syncOffset.ToStr() + "s"
+    if m.syncOffset < 0 then label = label + " -" + (0 - m.syncOffset).ToStr() + "s"
+    m.syncValue.text = label
+    delay = chatDelay()
+    m.syncHint.text = "Chat delay " + (delay \ 1000).ToStr() + "." + ((delay mod 1000) \ 100).ToStr() + "s  ·  OK when done"
 end sub
 
 ' Middle value of a short list (the upper one for an even count), found by counting rather
@@ -113,6 +205,7 @@ end function
 sub stopJobs()
     m.chatJob = destroyTask(m.chatJob, "messages")
     if m.animWatch <> invalid then m.animWatch.control = "stop"
+    saveSyncOffset()
 end sub
 
 function settingNumber(name as string, fallback as string) as integer

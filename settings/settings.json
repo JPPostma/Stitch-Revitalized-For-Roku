@@ -70,7 +70,7 @@
     },
     {
         "title": "Chat Sync",
-        "description": "Match the video holds chat back by however far behind live the video is, so messages line up with what you see, and keeps adjusting if the video falls further behind. Real time shows chat as it is typed, ahead of the video.",
+        "description": "Match the video holds chat back by however far behind live the video is, so messages line up with what you see, and keeps adjusting if the video falls further behind. Real time shows chat as it is typed, ahead of the video. To fine-tune while watching, press OK, pick the clock button, and use left/right to move chat a second earlier or later.",
         "settingName": "ChatSync",
         "type": "radio",
         "default": "auto",

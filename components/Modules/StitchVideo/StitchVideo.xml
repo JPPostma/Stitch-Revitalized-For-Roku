@@ -34,6 +34,10 @@
              User-initiated paths (first open, re-open from home/channel page,
              quality change) leave this false so they get the low-latency seek. -->
         <field id="suppressStartupSeek" type="bool" value="false" />
+        <!-- Chat Sync button: true while left/right nudge the chat delay, and each nudge
+             sets chatSyncStep to -1 or 1. VideoPlayer passes both on to Chat. -->
+        <field id="chatSyncAdjusting" type="bool" value="false" />
+        <field id="chatSyncStep" type="integer" value="0" alwaysNotify="true" />
 
     </interface>
     
@@ -69,12 +73,19 @@
                 </Group>
                 
                 <!-- Chat Toggle Button -->
-                <Group id="chatGroup" translation="[540,0]">
+                <Group id="chatGroup" translation="[470,0]">
                     <Rectangle id="chatBg" color="0x404040AA" width="50" height="40" />
                     <Rectangle id="chatFocus" color="0x9146FFFF" width="50" height="40" visible="false" />
                     <Poster id="messagesButton" uri="pkg:/images/messages.png" width="20" height="20" translation="[15,10]" />
                 </Group>
-                
+
+                <!-- Chat Sync Button (nudge the chat delay with left/right) -->
+                <Group id="chatSyncGroup" translation="[540,0]">
+                    <Rectangle id="chatSyncBg" color="0x404040AA" width="50" height="40" />
+                    <Rectangle id="chatSyncFocus" color="0x9146FFFF" width="50" height="40" visible="false" />
+                    <Poster id="chatSyncButton" uri="pkg:/images/icons/clock-o.png" width="20" height="20" translation="[15,10]" />
+                </Group>
+
                 <!-- Play/Pause Button (center between chat and quality) -->
                 <Group id="playPauseGroup" translation="[610,0]" focusable="true">
                     <Rectangle id="playPauseBg" color="0x404040AA" width="60" height="40" />

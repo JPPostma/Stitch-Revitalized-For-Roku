@@ -10,6 +10,10 @@
         <field id="fontSize" type="integer" value="14" onChange="applyLayout" />
         <!-- Live video's distance behind the live edge in ms (set by VideoPlayer), for Chat Sync -->
         <field id="videoLatency" type="integer" value="-1" onChange="onVideoLatency" alwaysNotify="true" />
+        <!-- The player's Chat Sync adjuster: shows the sync panel, and each step (1 or -1)
+             shows chat a second later or earlier than Settings → Chat Sync alone would -->
+        <field id="syncPanelVisible" type="bool" value="false" onChange="onSyncPanelVisible" />
+        <field id="syncStep" type="integer" value="0" onChange="onSyncStep" alwaysNotify="true" />
         <function name="stopJobs" />
     </interface>
 
