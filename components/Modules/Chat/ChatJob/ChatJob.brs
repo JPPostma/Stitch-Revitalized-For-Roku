@@ -22,7 +22,8 @@ sub main()
     m.badges = {}
     m.seenIds = {}
     m.seenOrder = []
-    m.sources = chatEmoteSources(m.top.channelId, m.top.providers)
+    m.channelId = m.top.channelId
+    m.sources = chatEmoteSources(m.channelId, m.top.providers)
     m.tokenizer = createChatTokenizer(buildChatEmoteMap(m.sources, m.emoteLists))
     m.ready = false
     m.firstFlush = true
@@ -255,8 +256,23 @@ sub handleLine(line as string, now as integer)
             m.lostNoticeShown = false
         else if msg.command = "RECONNECT"
             scheduleReconnect(now, true)
+        else if msg.command = "ROOMSTATE" and m.channelId = "" and msg.tags["room-id"] <> invalid
+            loadChannelEmotes(msg.tags["room-id"], "ROOMSTATE")
         end if
     end if
+end sub
+
+' Some screens (the Recently Watched bar) open a stream without the channel's user id, which
+' its own 7TV/BTTV/FFZ emotes are looked up by. The Twitch emote lookup and the IRC ROOMSTATE
+' both carry it; whichever comes first starts those lists.
+sub loadChannelEmotes(channelId as string, from as string)
+    if channelId = "" or m.channelId <> "" then return
+    m.channelId = channelId
+    ? getLogTimestamp(); " [ChatJob] channel id "; channelId; " (from "; from; ")"
+    m.sources = chatEmoteSources(channelId, m.top.providers)
+    for each source in m.sources
+        if source.key.Right(8) = "-channel" then startRequest(source.key, source.url, invalid, invalid)
+    end for
 end sub
 
 function isModerationLine(line as string) as boolean
@@ -459,6 +475,7 @@ sub onRequestDone(msg as object)
     else if key = "twitch-emotes"
         m.tokenizer.twitchAnimated = parseTwitchAnimatedEmotes(json)
         count = m.tokenizer.twitchAnimated.Count()
+        loadChannelEmotes(parseTwitchUserId(json), "Twitch")
     else
         m.emoteLists[key] = parseChatEmotes(key, json)
         m.tokenizer.emotes = buildChatEmoteMap(m.sources, m.emoteLists)

@@ -40,7 +40,7 @@ source/                    # BrightScript utilities and entry point
   constants.brs            # Global constants, design tokens, color palettes
   utils/                   # Shared utility functions
     array.brs              # Array utility functions
-    chatEmotes.brs         # 7TV/BTTV/FFZ emote and Twitch badge parsers for chat
+    chatEmotes.brs         # 7TV/BTTV/FFZ emote and Twitch badge parsers for chat; wsrv.nl re-encode URLs
     chatParser.brs         # Twitch IRC parsing and chat message tokenizing (emotes, emoji)
     config.brs             # Registry (persistent storage) accessors
     deviceCapabilities.brs # Device/codec detection (HEVC, AV1, HDR, bitrate)

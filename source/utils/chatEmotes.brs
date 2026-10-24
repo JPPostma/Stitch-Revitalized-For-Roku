@@ -4,6 +4,17 @@
 '     anim? (animated WebP), check? (animated WebP to use once its size is checked),
 '     zw? (zero-width overlay), unsized? (size unknown until loaded) }
 
+' Roku's AnimatedImage plays lossy animated WebP (what 7TV serves) but not GIF ("Unable to
+' detect decoder type") or BTTV's lossless WebP, so those are re-encoded by wsrv.nl, a free
+' image proxy: same frames and timing, lossy WebP out.
+function lossyWebpUrl(url as string) as string
+    return "https://wsrv.nl/?url=" + url.EncodeUriComponent() + "&n=-1&output=webp"
+end function
+
+function isLossyWebpUrl(url as string) as boolean
+    return url.Left(16) = "https://wsrv.nl/"
+end function
+
 ' Emote lists to load for a channel. Later sources override earlier ones with the same
 ' name, matching Chatterino: channel emotes beat global ones, then FFZ > BTTV > 7TV.
 function chatEmoteSources(channelId as string, providers as object) as object
@@ -85,9 +96,9 @@ end function
 
 ' BTTV: the global endpoint is an array; a channel has channelEmotes and sharedEmotes.
 ' BTTV doesn't report image sizes, so the overlay learns them once an image loads, and
-' animated emotes only animate after a HEAD request shows the file is small enough (most
-' are ~30 KB, a few are close to 1 MB). Their still frame can be blank, so animating
-' matters.
+' animated emotes (re-encoded, see lossyWebpUrl) keep animating only if a HEAD request
+' shows the file is small enough (most are ~15 KB). Their still frame can be blank, so
+' animating matters.
 function parseBttvEmotes(json as object) as object
     entries = []
     lists = []
@@ -107,7 +118,7 @@ function parseBttvEmotes(json as object) as object
         for each emote in list
             if emote.id <> invalid and emote.code <> invalid
                 entry = { name: emote.code, url: "https://cdn.betterttv.net/emote/" + emote.id + "/2x.png", w: 28, h: 28, unsized: true }
-                if emote.animated = true then entry.check = "https://cdn.betterttv.net/emote/" + emote.id + "/1x.webp"
+                if emote.animated = true then entry.check = lossyWebpUrl("https://cdn.betterttv.net/emote/" + emote.id + "/1x.webp")
                 if zeroWidth[emote.code] = true then entry.zw = true
                 entries.Push(entry)
             end if
@@ -204,10 +215,11 @@ function chatBadgeRequest(channel as string, deviceId as string) as object
     }
 end function
 
-' Twitch GQL request listing the channel's subscriber emotes and whether each is animated.
+' Twitch GQL request for the channel's user id and its subscriber emotes (and whether each
+' is animated).
 function chatTwitchEmotesRequest(channel as string, deviceId as string) as object
     body = {
-        "query": "query($login: String!) { user(login: $login) { subscriptionProducts { emotes { id assetType } } } }",
+        "query": "query($login: String!) { user(login: $login) { id subscriptionProducts { emotes { id assetType } } } }",
         "variables": { "login": channel }
     }
     return {
@@ -237,6 +249,14 @@ function parseTwitchAnimatedEmotes(json as dynamic) as object
         end if
     end for
     return animated
+end function
+
+' The channel's Twitch user id from that same response, or "".
+function parseTwitchUserId(json as dynamic) as string
+    if json = invalid or json.data = invalid or json.data.user = invalid then return ""
+    id = json.data.user.id
+    if id = invalid then return ""
+    return id.ToStr()
 end function
 
 ' Returns "setID/version" -> image URL for global and channel badges.

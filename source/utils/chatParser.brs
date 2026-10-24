@@ -135,8 +135,8 @@ end function
 
 ' Splits a chat message into render tokens:
 '   { text: "words joined by spaces", link?: true, glue?: true }
-'   { url, w, h, anim?, gif?, zw?, unsized?, emoji?, glue? } for emotes and emoji
-' glue means "no space before this token" (emoji touching text); gif means anim is a GIF.
+'   { url, w, h, anim?, zw?, unsized?, emoji?, glue? } for emotes and emoji
+' glue means "no space before this token" (emoji touching text).
 function tokenizeChatMessage(text as string, twitchEmotes as object, tokenizer as object) as object
     tokens = []
     textRun = ""
@@ -148,8 +148,8 @@ function tokenizeChatMessage(text as string, twitchEmotes as object, tokenizer a
             if twitchId <> invalid
                 image = { url: "https://static-cdn.jtvnw.net/emoticons/v2/" + twitchId + "/static/dark/2.0", w: 28, h: 28 }
                 if tokenizer.twitchAnimated[twitchId] = true
-                    image.anim = "https://static-cdn.jtvnw.net/emoticons/v2/" + twitchId + "/animated/dark/1.0"
-                    image.gif = true
+                    ' Twitch only serves animated emotes as GIFs.
+                    image.anim = lossyWebpUrl("https://static-cdn.jtvnw.net/emoticons/v2/" + twitchId + "/animated/dark/1.0")
                 end if
             else
                 image = emotes[word]

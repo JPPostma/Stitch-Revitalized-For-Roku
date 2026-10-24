@@ -30,8 +30,7 @@ sub init()
     m.clock = CreateObject("roTimespan")
     m.animById = {} ' AnimatedImage id -> its entry, to react to state changes
     m.animSeq = 0
-    m.animStarted = 0
-    m.animFailed = 0
+    resetAnimationHealth()
     m.stillFailed = 0
     m.animWatch = CreateObject("roSGNode", "Timer")
     m.animWatch.duration = 2
@@ -73,8 +72,7 @@ sub onEnterChannel()
     }
     m.chatJob.observeField("messages", "onChatMessages")
     m.chatJob.control = "run"
-    m.animStarted = 0
-    m.animFailed = 0
+    resetAnimationHealth()
     if m.animLimit > 0 then m.animWatch.control = "start"
     ? getLogTimestamp(); " [Chat] "; m.top.channel; ": AnimatedImage available="; m.canAnimate; " limit="; m.animLimit; " sync="; m.syncMode
 end sub
@@ -337,8 +335,9 @@ sub updateAnimationState(entry as object, state as string)
     if state = "first" or state = "decode"
         if not entry.started
             entry.started = true
-            m.animStarted = m.animStarted + 1
-            if m.animStarted = 1 then ? getLogTimestamp(); " [Chat] animated emotes are playing ("; entry.node.uri; ")"
+            way = animWay(entry.node.uri)
+            way.started = way.started + 1
+            if way.started = 1 then ? getLogTimestamp(); " [Chat] animated emotes are playing ("; entry.node.uri; ")"
         end if
         entry.node.unobserveField("state")
     else if state = "error"
@@ -363,18 +362,59 @@ sub checkAnimations()
     end for
 end sub
 
+' Draws a failed animation still. From then on that emote uses its re-encoded copy (some
+' 7TV files have lossless frames), or its still image if the re-encoded copy is what failed.
 sub failAnimation(entry as object, reason as string)
+    uri = entry.node.uri
+    way = animWay(uri)
+    way.failed = way.failed + 1
     m.animFailed = m.animFailed + 1
-    if m.animFailed <= 5 then ? getLogTimestamp(); " [Chat] animated emote fell back to its still image ("; reason; "): "; entry.node.uri
+    if m.animFailed <= 8 then ? getLogTimestamp(); " [Chat] animated emote fell back to its still image ("; reason; "): "; uri
+    if isLossyWebpUrl(uri)
+        m.animSwap[entry.anim] = ""
+    else
+        m.animSwap[entry.anim] = lossyWebpUrl(uri)
+    end if
     freezeAnimation(entry)
     m.animated = liveAnimations(m.animated)
     m.paused = liveAnimations(m.paused)
-    ' If none have ever played, this Roku can't show them: stop trying for this stream.
-    if m.animStarted = 0 and m.animFailed >= 4 and m.animLimit > 0
-        m.animLimit = 0
-        ? getLogTimestamp(); " [Chat] animated emotes are not playing on this Roku; using still images"
+    if way.started = 0 and way.failed = 4
+        if isLossyWebpUrl(uri)
+            ? getLogTimestamp(); " [Chat] re-encoded animated emotes are not playing; drawing them still"
+        else
+            ? getLogTimestamp(); " [Chat] animated emotes are not playing straight from the provider; using re-encoded copies"
+        end if
     end if
 end sub
+
+' Animations play two ways: straight from the provider (7TV) or re-encoded by wsrv.nl (BTTV,
+' Twitch, and 7TV files that didn't play). A way whose first few files all fail is given
+' up for the stream, so one broken way doesn't turn off the other.
+sub resetAnimationHealth()
+    m.animDirect = { started: 0, failed: 0 }
+    m.animProxied = { started: 0, failed: 0 }
+    m.animFailed = 0
+    m.animSwap = {} ' animated URL -> the file to use instead: its re-encoded copy, or "" (still)
+    m.animSwap.SetModeCaseSensitive()
+end sub
+
+function animWay(uri as string) as object
+    if isLossyWebpUrl(uri) then return m.animProxied
+    return m.animDirect
+end function
+
+function animWayWorks(way as object) as boolean
+    return way.started > 0 or way.failed < 4
+end function
+
+' The animated file to draw for an emote, or "" for its still image.
+function pickAnimation(anim as string) as string
+    swap = m.animSwap[anim]
+    if swap <> invalid then anim = swap
+    if anim <> "" and not isLossyWebpUrl(anim) and not animWayWorks(m.animDirect) then anim = lossyWebpUrl(anim)
+    if anim <> "" and isLossyWebpUrl(anim) and not animWayWorks(m.animProxied) then anim = ""
+    return anim
+end function
 
 function liveAnimations(entries as object) as object
     live = []
@@ -566,14 +606,16 @@ sub layoutImage(layout as object, token as object)
         layout.lastEmote = { x: x, w: w }
     end if
     if node.subtype() = "AnimatedImage"
-        entry = { node: node, parent: layout.group, index: layout.group.getChildCount() - 1, still: token.url, dead: false, started: false, created: m.clock.TotalMilliseconds() }
+        entry = { node: node, parent: layout.group, index: layout.group.getChildCount() - 1, still: token.url, anim: token.anim, dead: false, started: false, created: m.clock.TotalMilliseconds() }
         layout.anims.Push(entry)
         m.animById[node.id] = entry
     end if
 end sub
 
 function createEmote(token as object, w as float, h as float) as object
-    if token.anim <> invalid and m.animLimit > 0
+    anim = ""
+    if token.anim <> invalid and m.animLimit > 0 then anim = pickAnimation(token.anim)
+    if anim <> ""
         ' bs:disable-next-line: 1128
         animated = CreateObject("roSGNode", "AnimatedImage")
         if animated <> invalid
@@ -584,9 +626,8 @@ function createEmote(token as object, w as float, h as float) as object
             animated.height = h
             animated.loadingBitmapUri = token.url
             animated.failedBitmapUri = token.url
-            ' Twitch serves GIFs, which AnimatedImage detects by itself; 7TV/BTTV serve WebP.
-            if token.gif <> true then animated.mimeType = "video/webp"
-            animated.uri = token.anim
+            animated.mimeType = "video/webp"
+            animated.uri = anim
             animated.control = "loop"
             return animated
         end if
