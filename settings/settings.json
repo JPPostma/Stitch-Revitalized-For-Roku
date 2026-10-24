@@ -69,19 +69,19 @@
         ]
     },
     {
-        "title": "Chat Delay",
-        "description": "Holds chat messages back so they line up with the video. Off shows chat in real time, the same as Twitch and Chatterino.",
-        "settingName": "ChatDelay",
+        "title": "Chat Sync",
+        "description": "Match the video holds chat back by however far behind live the video is, so messages line up with what you see, and keeps adjusting if the video falls further behind. Real time shows chat as it is typed, ahead of the video.",
+        "settingName": "ChatSync",
         "type": "radio",
-        "default": "0",
+        "default": "auto",
         "options": [
             {
-                "title": "Off (real time)",
-                "id": "0"
+                "title": "Match the video (automatic)",
+                "id": "auto"
             },
             {
-                "title": "3 seconds",
-                "id": "3"
+                "title": "Real time (no delay)",
+                "id": "0"
             },
             {
                 "title": "5 seconds",
@@ -94,6 +94,14 @@
             {
                 "title": "15 seconds",
                 "id": "15"
+            },
+            {
+                "title": "20 seconds",
+                "id": "20"
+            },
+            {
+                "title": "25 seconds",
+                "id": "25"
             },
             {
                 "title": "30 seconds",

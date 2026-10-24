@@ -165,6 +165,7 @@ sub playContent(isRecovery = false as boolean)
         m.video.unobserveField("toggleChat")
         m.video.unobserveField("QualityChangeRequestFlag") ' StitchVideo specific
         m.video.unobserveField("qualityChangeRequest") ' StitchVideo specific
+        m.video.unobserveField("streamingSegment") ' live only, for Chat Sync
         m.video.unobserveField("position")
         m.video.unobserveField("state")
         m.video.unobserveField("duration")
@@ -233,6 +234,7 @@ sub playContent(isRecovery = false as boolean)
     m.video.observeField("toggleChat", "onToggleChat")
     if isLiveContent
         m.video.observeField("QualityChangeRequestFlag", "onQualityChangeRequested") ' StitchVideo specific
+        m.video.observeField("streamingSegment", "onStreamingSegment")
     else
         m.video.observeField("back", "onVideoBack") ' CustomVideo specific
     end if
@@ -355,6 +357,7 @@ sub exitPlayer()
         m.video.unobserveField("toggleChat")
         if m.video.isSubtype("StitchVideo")
             m.video.unobserveField("QualityChangeRequestFlag")
+            m.video.unobserveField("streamingSegment")
         else if m.video.isSubtype("CustomVideo")
             m.video.unobserveField("back")
         end if
@@ -423,6 +426,16 @@ sub init()
     m.watchdogTimer.repeat = true
     m.watchdogTimer.duration = 2 ' seconds
     m.watchdogTimer.observeField("fire", "onWatchdogFire")
+end sub
+
+' Hands chat the live player's distance behind the live edge (streamingSegment.latency, ms,
+' updated each segment) so Chat Sync can delay messages by the same amount.
+sub onStreamingSegment()
+    if m.chatWindow = invalid or m.video = invalid then return
+    seg = m.video.streamingSegment
+    if seg <> invalid and seg.latency <> invalid and seg.latency >= 0
+        m.chatWindow.videoLatency = seg.latency
+    end if
 end sub
 
 sub onToggleChat()

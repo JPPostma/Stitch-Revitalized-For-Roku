@@ -21,7 +21,7 @@ A feature-complete Twitch client for Roku.
 
 ### Chat
 
-- Messages appear in real time, like on Twitch or in Chatterino (Settings → Chat Delay can hold them back to match the video; off by default)
+- Chat stays in sync with the video: it is held back by however far behind live the Roku player is, measured continuously (Settings → Chat Sync, which also offers real time or a fixed delay)
 - 7TV, BetterTTV and FrankerFaceZ emotes at their real sizes, including zero-width overlay emotes, plus badges and emoji
 - Animated 7TV and BetterTTV emotes, plus the channel's animated Twitch emotes, on Roku OS 15.3 and newer (Settings → Animated Emotes); older devices show still images
 - The last few messages sent before you opened the stream (Settings → Recent Chat History)

@@ -27,6 +27,9 @@ sub init()
     ' bs:disable-next-line: 1128
     m.canAnimate = CreateObject("roSGNode", "AnimatedImage") <> invalid
     m.animLimit = 0
+    m.syncMode = "auto"
+    m.latencySamples = []
+    m.chatDelayMs = 0
 
     m.top.observeField("visible", "onVisibleChange")
     applyLayout()
@@ -43,7 +46,15 @@ sub onEnterChannel()
     m.chatJob = CreateObject("roSGNode", "ChatJob")
     m.chatJob.channel = m.top.channel
     m.chatJob.channelId = m.top.channel_id
-    m.chatJob.delay = settingNumber("ChatDelay", "0")
+    m.syncMode = get_user_setting("ChatSync", "auto")
+    m.latencySamples = []
+    if m.syncMode = "auto"
+        ' Typical distance behind live on Roku, used until the player reports the real one.
+        m.chatDelayMs = 20000
+    else
+        m.chatDelayMs = m.syncMode.ToInt() * 1000
+    end if
+    m.chatJob.delayMs = m.chatDelayMs
     m.chatJob.history = get_user_setting("ChatHistory", "true") = "true"
     m.chatJob.providers = {
         seventv: get_user_setting("7tvEmote", "true") = "true",
@@ -53,6 +64,37 @@ sub onEnterChannel()
     m.chatJob.observeField("messages", "onChatMessages")
     m.chatJob.control = "run"
 end sub
+
+' Chat Sync "auto": the live player reports how far behind the live edge it is (ms) on every
+' new segment. Chat is delayed by the median of the last few readings, so it lines up with
+' the picture (and follows it after a rebuffer) without jumping on every segment.
+sub onVideoLatency()
+    latency = m.top.videoLatency
+    if latency < 0 or m.syncMode <> "auto" then return
+    m.latencySamples.Push(latency)
+    if m.latencySamples.Count() > 5 then m.latencySamples.Shift()
+    median = medianOf(m.latencySamples)
+    if Abs(median - m.chatDelayMs) < 1000 then return
+    m.chatDelayMs = median
+    if m.chatJob <> invalid then m.chatJob.delayMs = median
+end sub
+
+' Middle value of a short list (the upper one for an even count), found by counting rather
+' than roArray.Sort(), which the brs-engine simulator leaves unsorted. Index loops, because
+' nested "for each" over one array shares its enumerator.
+function medianOf(values as object) as integer
+    count = values.Count()
+    for i = 0 to count - 1
+        below = 0
+        above = 0
+        for j = 0 to count - 1
+            if values[j] < values[i] then below = below + 1
+            if values[j] > values[i] then above = above + 1
+        end for
+        if below <= count \ 2 and above <= (count - 1) \ 2 then return values[i]
+    end for
+    return values[0]
+end function
 
 ' Stops the ChatJob task (IRC socket and downloads). Called from VideoPlayer.exitPlayer()
 ' so the connection closes at user-initiated exit, not only when onDestroy eventually runs.

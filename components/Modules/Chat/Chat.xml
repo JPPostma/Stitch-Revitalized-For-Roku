@@ -8,6 +8,8 @@
         <field id="width" type="integer" value="320" onChange="applyLayout" />
         <field id="height" type="integer" value="720" onChange="applyLayout" />
         <field id="fontSize" type="integer" value="14" onChange="applyLayout" />
+        <!-- Live video's distance behind the live edge in ms (set by VideoPlayer), for Chat Sync -->
+        <field id="videoLatency" type="integer" value="-1" onChange="onVideoLatency" alwaysNotify="true" />
         <function name="stopJobs" />
     </interface>
 

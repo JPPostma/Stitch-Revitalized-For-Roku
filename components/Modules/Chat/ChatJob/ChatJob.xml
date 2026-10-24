@@ -3,10 +3,10 @@
 <component name="ChatJob" extends="Task">
 
     <interface>
-        <!-- Inputs, set before control = "run" -->
+        <!-- Inputs, set before control = "run" (delayMs can also change while running) -->
         <field id="channel" type="string" />
         <field id="channelId" type="string" />
-        <field id="delay" type="integer" value="0" />
+        <field id="delayMs" type="integer" value="0" />
         <field id="history" type="bool" value="true" />
         <field id="providers" type="assocarray" />
         <!-- Output: batches of render items for the Chat overlay -->

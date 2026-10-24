@@ -1,6 +1,7 @@
 ' Keeps an anonymous Twitch IRC connection open, loads emotes/badges/history in parallel,
 ' and hands the Chat overlay small batches of ready-to-draw messages (~10 per second).
-' Messages are shown as soon as they arrive unless the user picked a chat delay.
+' Each message is held for delayMs after it arrives; the overlay keeps that in step with
+' how far behind live the video is (or 0 for real time).
 
 sub init()
     m.top.functionName = "main"
@@ -12,8 +13,10 @@ sub main()
     m.port = CreateObject("roMessagePort")
     m.clock = CreateObject("roTimespan")
     m.crlf = Chr(13) + Chr(10)
-    m.delayMs = m.top.delay * 1000
-    m.inbox = [] ' { at: release time in ms, line } or { at, system: text }, in arrival order
+    m.delayMs = m.top.delayMs
+    ' In arrival order: { t: arrival time in ms, line } for live chat, released at t + delayMs;
+    ' { line } for history and { system: text } for notices, released right away.
+    m.inbox = []
     m.requests = {}
     m.emoteLists = {}
     m.badges = {}
@@ -36,6 +39,7 @@ sub main()
     m.sizeQueue = [] ' BTTV emotes waiting for a HEAD request before they may animate
     m.sizeChecks = 0
     m.top.observeField("control", m.port)
+    m.top.observeField("delayMs", m.port)
 
     for each source in m.sources
         startRequest(source.key, source.url, invalid, invalid)
@@ -60,6 +64,7 @@ sub main()
             onRequestDone(msg)
         else if msgType = "roSGNodeEvent"
             if msg.getField() = "control" and LCase(msg.getData()) = "stop" then exit while
+            if msg.getField() = "delayMs" then m.delayMs = msg.getData()
         end if
 
         now = m.clock.TotalMilliseconds()
@@ -114,7 +119,7 @@ sub scheduleReconnect(now as integer, immediate as boolean)
     closeIrc()
     if m.connected and not m.lostNoticeShown
         m.lostNoticeShown = true
-        m.inbox.Push({ at: now, system: "Chat connection lost. Reconnecting..." })
+        m.inbox.Push({ system: "Chat connection lost. Reconnecting..." })
     end if
     if immediate
         m.reconnectAt = now + 1
@@ -219,7 +224,7 @@ sub handleLine(line as string, now as integer)
     if line.Left(5) = "PING "
         sendLine("PONG " + line.Mid(5))
     else if line.Instr(" PRIVMSG #") > 0 or line.Instr(" USERNOTICE #") > 0 or isModerationLine(line)
-        m.inbox.Push({ at: now + m.delayMs, line: line })
+        m.inbox.Push({ t: now, line: line })
         if m.inbox.Count() > 800 then m.inbox.Shift()
     else
         msg = parseIrcLine(line)
@@ -227,7 +232,7 @@ sub handleLine(line as string, now as integer)
         if msg.command = "001"
             m.backoffMs = 1000
             if m.lostNoticeShown
-                m.inbox.Push({ at: now, system: "Reconnected to chat." })
+                m.inbox.Push({ system: "Reconnected to chat." })
             end if
             m.connected = true
             m.lostNoticeShown = false
@@ -246,7 +251,11 @@ end function
 sub flushInbox(now as integer)
     m.lastFlush = now
     released = []
-    while m.inbox.Count() > 0 and m.inbox[0].at <= now
+    ' Release time is worked out here rather than on arrival, so a delay change (the video
+    ' falling further behind live, or catching up) applies to messages already waiting.
+    while m.inbox.Count() > 0
+        arrived = m.inbox[0].t
+        if arrived <> invalid and arrived + m.delayMs > now then exit while
         released.Push(m.inbox.Shift())
     end while
     if released.Count() = 0 then return
@@ -422,7 +431,7 @@ sub addHistory(json as dynamic)
     if json = invalid or json.messages = invalid then return
     history = []
     for each line in json.messages
-        history.Push({ at: 0, line: line })
+        history.Push({ line: line })
     end for
     history.Append(m.inbox)
     m.inbox = history
