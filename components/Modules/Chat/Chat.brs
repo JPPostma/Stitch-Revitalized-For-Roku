@@ -27,6 +27,16 @@ sub init()
     ' bs:disable-next-line: 1128
     m.canAnimate = CreateObject("roSGNode", "AnimatedImage") <> invalid
     m.animLimit = 0
+    m.clock = CreateObject("roTimespan")
+    m.animById = {} ' AnimatedImage id -> its entry, to react to state changes
+    m.animSeq = 0
+    m.animStarted = 0
+    m.animFailed = 0
+    m.stillFailed = 0
+    m.animWatch = CreateObject("roSGNode", "Timer")
+    m.animWatch.duration = 2
+    m.animWatch.repeat = true
+    m.animWatch.observeField("fire", "checkAnimations")
     m.syncMode = "auto"
     m.latencySamples = []
     m.chatDelayMs = 0
@@ -63,6 +73,10 @@ sub onEnterChannel()
     }
     m.chatJob.observeField("messages", "onChatMessages")
     m.chatJob.control = "run"
+    m.animStarted = 0
+    m.animFailed = 0
+    if m.animLimit > 0 then m.animWatch.control = "start"
+    ? getLogTimestamp(); " [Chat] "; m.top.channel; ": AnimatedImage available="; m.canAnimate; " limit="; m.animLimit; " sync="; m.syncMode
 end sub
 
 ' Chat Sync "auto": the live player reports how far behind the live edge it is (ms) on every
@@ -100,6 +114,7 @@ end function
 ' so the connection closes at user-initiated exit, not only when onDestroy eventually runs.
 sub stopJobs()
     m.chatJob = destroyTask(m.chatJob, "messages")
+    if m.animWatch <> invalid then m.animWatch.control = "stop"
 end sub
 
 function settingNumber(name as string, fallback as string) as integer
@@ -228,6 +243,7 @@ sub clearRows()
     m.rows = []
     m.animated = []
     m.paused = []
+    m.animById = {}
     m.contentBottom = 0
     m.content.translation = [0, m.top.height]
 end sub
@@ -287,6 +303,8 @@ sub freezeAnimation(entry as object)
     if entry.dead then return
     entry.dead = true
     animatedNode = entry.node
+    animatedNode.unobserveField("state")
+    m.animById.Delete(animatedNode.id)
     poster = CreateObject("roSGNode", "Poster")
     poster.loadDisplayMode = "scaleToFit"
     poster.width = animatedNode.width
@@ -300,9 +318,62 @@ sub releaseAnimations(anims as object)
     if anims.Count() = 0 then return
     for each entry in anims
         entry.dead = true
+        entry.node.unobserveField("state")
+        m.animById.Delete(entry.node.id)
     end for
     m.animated = liveAnimations(m.animated)
     m.paused = liveAnimations(m.paused)
+end sub
+
+' AnimatedImage goes downloading -> init -> first -> decode when it works, or to error.
+sub onAnimatedState(event as object)
+    node = event.getRoSGNode()
+    entry = m.animById[node.id]
+    if entry = invalid or entry.dead then return
+    updateAnimationState(entry, event.getData())
+end sub
+
+sub updateAnimationState(entry as object, state as string)
+    if state = "first" or state = "decode"
+        if not entry.started
+            entry.started = true
+            m.animStarted = m.animStarted + 1
+            if m.animStarted = 1 then ? getLogTimestamp(); " [Chat] animated emotes are playing ("; entry.node.uri; ")"
+        end if
+        entry.node.unobserveField("state")
+    else if state = "error"
+        failAnimation(entry, "error: " + entry.node.error)
+    end if
+end sub
+
+' Swaps animated emotes that never start (stuck downloading) for their still image, so an
+' emote is never left blank. Reads the state directly as well, in case a state change
+' wasn't reported.
+sub checkAnimations()
+    now = m.clock.TotalMilliseconds()
+    for each list in [m.animated, m.paused]
+        for each entry in list
+            if not entry.dead and not entry.started
+                updateAnimationState(entry, entry.node.state)
+                if not entry.dead and not entry.started and now - entry.created > 8000
+                    failAnimation(entry, "stuck in state " + entry.node.state)
+                end if
+            end if
+        end for
+    end for
+end sub
+
+sub failAnimation(entry as object, reason as string)
+    m.animFailed = m.animFailed + 1
+    if m.animFailed <= 5 then ? getLogTimestamp(); " [Chat] animated emote fell back to its still image ("; reason; "): "; entry.node.uri
+    freezeAnimation(entry)
+    m.animated = liveAnimations(m.animated)
+    m.paused = liveAnimations(m.paused)
+    ' If none have ever played, this Roku can't show them: stop trying for this stream.
+    if m.animStarted = 0 and m.animFailed >= 4 and m.animLimit > 0
+        m.animLimit = 0
+        ? getLogTimestamp(); " [Chat] animated emotes are not playing on this Roku; using still images"
+    end if
 end sub
 
 function liveAnimations(entries as object) as object
@@ -495,7 +566,9 @@ sub layoutImage(layout as object, token as object)
         layout.lastEmote = { x: x, w: w }
     end if
     if node.subtype() = "AnimatedImage"
-        layout.anims.Push({ node: node, parent: layout.group, index: layout.group.getChildCount() - 1, still: token.url, dead: false })
+        entry = { node: node, parent: layout.group, index: layout.group.getChildCount() - 1, still: token.url, dead: false, started: false, created: m.clock.TotalMilliseconds() }
+        layout.anims.Push(entry)
+        m.animById[node.id] = entry
     end if
 end sub
 
@@ -504,6 +577,9 @@ function createEmote(token as object, w as float, h as float) as object
         ' bs:disable-next-line: 1128
         animated = CreateObject("roSGNode", "AnimatedImage")
         if animated <> invalid
+            m.animSeq = m.animSeq + 1
+            animated.id = "anim" + m.animSeq.ToStr()
+            animated.observeField("state", "onAnimatedState")
             animated.width = w
             animated.height = h
             animated.loadingBitmapUri = token.url
@@ -519,20 +595,21 @@ function createEmote(token as object, w as float, h as float) as object
     poster.loadDisplayMode = "scaleToFit"
     poster.width = w
     poster.height = h
+    poster.observeField("loadStatus", "onEmoteLoaded")
     poster.uri = token.url
-    if token.unsized = true and not m.emoteSizes.DoesExist(token.url)
-        poster.observeField("loadStatus", "onEmoteLoaded")
-    end if
     return poster
 end function
 
 ' Learns the real size of emotes whose provider doesn't report one (BTTV) so later
-' messages draw them at the right aspect ratio.
+' messages draw them at the right aspect ratio, and logs images that fail to load.
 sub onEmoteLoaded(event as object)
     poster = event.getRoSGNode()
     status = event.getData()
     if status = "ready" and poster.bitmapHeight > 0
         m.emoteSizes[poster.uri] = { w: poster.bitmapWidth, h: poster.bitmapHeight }
+    else if status = "failed"
+        m.stillFailed = m.stillFailed + 1
+        if m.stillFailed <= 5 then ? getLogTimestamp(); " [Chat] emote image failed to load: "; poster.uri
     end if
     if status = "ready" or status = "failed"
         poster.unobserveField("loadStatus")
@@ -638,5 +715,6 @@ end function
 
 sub onDestroy()
     stopJobs()
+    m.animWatch.unobserveField("fire")
     m.top.unobserveField("visible")
 end sub

@@ -38,6 +38,7 @@ sub main()
     m.lostNoticeShown = false
     m.sizeQueue = [] ' BTTV emotes waiting for a HEAD request before they may animate
     m.sizeChecks = 0
+    m.stats = newChatStats()
     m.top.observeField("control", m.port)
     m.top.observeField("delayMs", m.port)
 
@@ -68,17 +69,33 @@ sub main()
         end if
 
         now = m.clock.TotalMilliseconds()
-        ' Hold the first batch until emotes and history load (at most 5s) so early messages
-        ' already show their emotes.
-        if not m.ready and (m.requests.Count() = 0 or now >= 5000)
+        ' Hold the first batch until emotes and history load (at most 10s; big 7TV sets are
+        ' over 1 MB) so early messages already show their emotes.
+        if not m.ready and (m.requests.Count() = 0 or now >= 10000)
             m.ready = true
+            ? getLogTimestamp(); " [ChatJob] ready after "; now; "ms with "; m.tokenizer.emotes.Count(); " emotes, "; m.badges.Count(); " badges, "; m.tokenizer.twitchAnimated.Count(); " animated Twitch emotes"
         end if
         if m.ready and now - m.lastFlush >= 100
             flushInbox(now)
         end if
+        if now - m.stats.since >= 30000 then logChatStats(now)
         checkConnection(now)
     end while
     closeIrc()
+end sub
+
+function newChatStats() as object
+    return { since: 0, messages: 0, twitch: 0, thirdParty: 0, animated: 0, emoji: 0 }
+end function
+
+' One line every 30s so emote problems can be read from the debug console (port 8085).
+sub logChatStats(now as integer)
+    s = m.stats
+    if s.messages > 0
+        ? getLogTimestamp(); " [ChatJob] last 30s: "; s.messages; " messages, "; s.twitch; " Twitch emotes, "; s.thirdParty; " 7TV/BTTV/FFZ emotes ("; s.animated; " animated), "; s.emoji; " emoji, delay "; m.delayMs; "ms"
+    end if
+    m.stats = newChatStats()
+    m.stats.since = now
 end sub
 
 sub connectIrc()
@@ -350,6 +367,19 @@ function buildChatItem(line as string) as dynamic
     if text <> ""
         item.tokens = tokenizeChatMessage(text, parseTwitchEmoteRanges(text, tags["emotes"]), m.tokenizer)
     end if
+    m.stats.messages = m.stats.messages + 1
+    for each token in item.tokens
+        if token.emoji = true
+            m.stats.emoji = m.stats.emoji + 1
+        else if token.url <> invalid
+            if token.url.Instr("static-cdn.jtvnw.net") >= 0
+                m.stats.twitch = m.stats.twitch + 1
+            else
+                m.stats.thirdParty = m.stats.thirdParty + 1
+            end if
+            if token.anim <> invalid then m.stats.animated = m.stats.animated + 1
+        end if
+    end for
 
     if command = "USERNOTICE"
         item.kind = "notice"
@@ -394,7 +424,9 @@ sub startRequest(key as string, url as string, body as dynamic, headers as dynam
     end if
     if started
         ' Keep a reference so the transfer isn't garbage collected (and cancelled) mid-flight.
-        m.requests[transfer.getIdentity().ToStr()] = { key: key, transfer: transfer }
+        m.requests[transfer.getIdentity().ToStr()] = { key: key, transfer: transfer, started: m.clock.TotalMilliseconds() }
+    else
+        ? getLogTimestamp(); " [ChatJob] "; key; " request could not start"
     end if
 end sub
 
@@ -405,24 +437,41 @@ sub onRequestDone(msg as object)
     if request = invalid then return
     m.requests.Delete(id)
     key = request.key
+    code = msg.getResponseCode()
     if key = "size"
         m.sizeChecks = m.sizeChecks - 1
-        applyEmoteSizeCheck(request.entry, msg.getResponseCode(), msg.getResponseHeaders())
+        if code <> 200 then ? getLogTimestamp(); " [ChatJob] size check failed for "; request.entry.name; ": HTTP "; code; " "; msg.getFailureReason()
+        applyEmoteSizeCheck(request.entry, code, msg.getResponseHeaders())
         queueSizeChecks()
         return
     end if
 
+    body = msg.getString()
     json = invalid
-    if msg.getResponseCode() = 200 then json = ParseJson(msg.getString())
+    if code = 200 then json = ParseJson(body)
+    count = 0
     if key = "history"
         addHistory(json)
+        if json <> invalid and json.messages <> invalid then count = json.messages.Count()
     else if key = "badges"
         m.badges = parseTwitchBadges(json)
+        count = m.badges.Count()
     else if key = "twitch-emotes"
         m.tokenizer.twitchAnimated = parseTwitchAnimatedEmotes(json)
+        count = m.tokenizer.twitchAnimated.Count()
     else
         m.emoteLists[key] = parseChatEmotes(key, json)
         m.tokenizer.emotes = buildChatEmoteMap(m.sources, m.emoteLists)
+        count = m.emoteLists[key].Count()
+    end if
+    elapsed = m.clock.TotalMilliseconds() - request.started
+    ? getLogTimestamp(); " [ChatJob] "; key; ": HTTP "; code; ", "; body.Len(); " bytes, "; count; " items, "; elapsed; "ms";
+    if code = 200 and json = invalid
+        print " (JSON parse failed)"
+    else if code <> 200
+        print " ("; msg.getFailureReason(); ")"
+    else
+        print ""
     end if
 end sub
 

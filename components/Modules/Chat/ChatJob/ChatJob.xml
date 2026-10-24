@@ -17,5 +17,6 @@
     <script type="text/brightscript" uri="pkg:/source/utils/chatParser.brs" />
     <script type="text/brightscript" uri="pkg:/source/utils/chatEmotes.brs" />
     <script type="text/brightscript" uri="pkg:/source/utils/config.brs" />
+    <script type="text/brightscript" uri="pkg:/source/utils/misc.brs" />
 
 </component>
